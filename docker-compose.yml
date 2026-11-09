@@ -1,0 +1,136 @@
+services:
+  redis:
+    image: redis:7.4
+    container_name: aegis-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "127.0.0.1:6379:6379"      # 내 PC에서만 접속 (LAN에 안 열림)
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7.0
+    container_name: aegis-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:27017:27017"    # 내 PC에서만 접속 (LAN에 안 열림)
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  gateway:
+    build: ./fds                   # fds 폴더의 Dockerfile로 이미지 생성
+    container_name: aegis-gateway
+    environment:
+      - REDIS_HOST=redis           # 컨테이너 안에서는 서비스 이름으로 Redis 접속
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB=aegis
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY}
+    ports:
+      - "8000:8000"                # LAN에 열림 → 봇 PC가 접속
+    volumes:
+      - ./fds/logs:/app/logs       # 로그가 내 PC의 C:\aegis-fds\fds\logs 에 쌓임
+    depends_on:
+      redis:
+        condition: service_healthy # Redis가 healthy가 된 뒤에 시작
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: aegis-kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  publisher:
+    build: ./fds
+    container_name: aegis-publisher
+    command: ["python", "-m", "app.publisher"]
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB=aegis
+      - KAFKA_BOOTSTRAP=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  alert-consumer:
+    build: ./fds
+    container_name: aegis-alert-consumer
+    command: ["python", "-m", "app.alert_consumer"]
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB=aegis
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - ALERT_TOPIC=fds.alerts.v1
+      - REDIS_HOST=redis
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  spark:
+    image: apache/spark:3.5.7
+    container_name: aegis-spark
+    user: root
+    command: >
+      /opt/spark/bin/spark-submit
+      --master local[2]
+      --driver-memory 2g
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7
+      --conf spark.jars.ivy=/opt/spark/ivy
+      /app/stream.py
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - KAFKA_TOPIC=transfer.events.v1
+      - ALERT_TOPIC=fds.alerts.v1
+      - CHECKPOINT_DIR=/checkpoints/alerts
+      - STARTING_OFFSETS=latest    # 첫 시작 때 과거 거래로 동결하지 않도록 새 거래부터 읽음
+    volumes:
+      - ./fds/spark:/app:ro
+      - spark-ivy:/opt/spark/ivy
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mongo-data:
+  kafka-data:
+  spark-ivy:
+  spark-checkpoints:

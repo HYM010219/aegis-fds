@@ -1,0 +1,5 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+redis==5.2.1
+pymongo==4.13.2
+confluent-kafka==2.16.1

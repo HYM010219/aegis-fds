@@ -520,8 +520,7 @@ class Detector:
                 by_from[t["from"]].append(t)
 
         # 3번째 거래: C가 A에게 돌려준 거래
-        cs = sorted({t["to"] for t in second if t["from"] not in hubs and t["to"] not in white
-                     and t["to"] not in targets})
+        cs = sorted({t["to"] for t in second if t["from"] not in hubs and t["to"] not in white})
         third = self._transfers_from(cs, t_day, to=sorted(targets)) if cs else []
         back = defaultdict(list)
         for t in third:

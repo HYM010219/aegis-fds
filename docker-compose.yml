@@ -31,13 +31,14 @@ services:
     restart: unless-stopped
 
   gateway:
-    build: ./fds                   # fds 폴더의 Dockerfile로 이미지 생성
+    build: ./fds/app               # fds/app 폴더의 Dockerfile로 이미지 생성
     container_name: aegis-gateway
     environment:
       - REDIS_HOST=redis           # 컨테이너 안에서는 서비스 이름으로 Redis 접속
       - MONGO_URI=${MONGO_URI}
       - MONGO_DB=aegis
       - GATEWAY_API_KEY=${GATEWAY_API_KEY}
+      - TRANSFERS_TTL_DAYS=0       # transfers 자동 삭제(일). 0 = 끔. ClickHouse 연결 후 14로 켬
     ports:
       - "8000:8000"                # LAN에 열림 → 봇 PC가 접속
     volumes:
@@ -73,7 +74,7 @@ services:
     restart: unless-stopped
 
   publisher:
-    build: ./fds
+    build: ./fds/app
     container_name: aegis-publisher
     command: ["python", "-m", "app.publisher"]
     environment:
@@ -86,7 +87,7 @@ services:
     restart: unless-stopped
 
   alert-consumer:
-    build: ./fds
+    build: ./fds/app
     container_name: aegis-alert-consumer
     command: ["python", "-m", "app.alert_consumer"]
     environment:
@@ -94,6 +95,7 @@ services:
       - MONGO_DB=aegis
       - KAFKA_BOOTSTRAP=kafka:9092
       - ALERT_TOPIC=fds.alerts.v1
+      - FREEZE_TOPIC=fds.freezes.v1  # 새로 동결한 지갑 → Spark 계기 ③
       - REDIS_HOST=redis
     depends_on:
       kafka:
@@ -103,7 +105,7 @@ services:
     restart: unless-stopped
 
   spark:
-    image: apache/spark:3.5.7
+    build: ./fds/spark             # 공식 Spark 이미지 + pymongo, redis
     container_name: aegis-spark
     user: root
     command: >
@@ -115,16 +117,24 @@ services:
       /app/stream.py
     environment:
       - KAFKA_BOOTSTRAP=kafka:9092
-      - KAFKA_TOPIC=transfer.events.v1
-      - ALERT_TOPIC=fds.alerts.v1
-      - CHECKPOINT_DIR=/checkpoints/alerts
-      - STARTING_OFFSETS=latest    # 첫 시작 때 과거 거래로 동결하지 않도록 새 거래부터 읽음
+      - TRANSFER_TOPIC=transfer.events.v1  # 통과한 거래 (계기 ②)
+      - HOLD_TOPIC=fds.holds.v1            # 1단계 보류, R07 차단 (계기 ①)
+      - FREEZE_TOPIC=fds.freezes.v1        # 동결 (계기 ③)
+      - ALERT_TOPIC=fds.alerts.v1          # L1~L8 경보 → 경보 소비자
+      - MONGO_URI=${MONGO_URI}             # 최근 2주 기록 조회
+      - MONGO_DB=aegis
+      - REDIS_HOST=redis
+      - PERIOD_PROFILE=demo        # demo: 20분/5분/1분, prod: 2주/24시간/1시간
+      - CHECKPOINT_DIR=/checkpoints/detector
+      - STARTING_OFFSETS=latest    # 첫 시작 때 과거 메시지로 동결하지 않도록 새 메시지부터 읽음
     volumes:
       - ./fds/spark:/app:ro
       - spark-ivy:/opt/spark/ivy
       - spark-checkpoints:/checkpoints
     depends_on:
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 

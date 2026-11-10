@@ -138,9 +138,31 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: aegis-clickhouse
+    environment:
+      - CLICKHOUSE_DB=aegis
+      - CLICKHOUSE_USER=aegis
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "127.0.0.1:8123:8123"      # 내 PC에서만 접속
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./fds/clickhouse:/docker-entrypoint-initdb.d:ro                          # .sql만 처음 한 번 실행
+      - ./fds/clickhouse/kafka.xml:/etc/clickhouse-server/config.d/kafka.xml:ro  # Kafka를 처음부터 읽기
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   redis-data:
   mongo-data:
   kafka-data:
   spark-ivy:
   spark-checkpoints:
+  clickhouse-data:

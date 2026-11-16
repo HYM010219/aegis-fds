@@ -10,14 +10,12 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from redis.exceptions import RedisError
 
-from app.blacklist import FROZEN_KEY, FROZEN_REASONS_KEY, LONG_RULES
-from app.whitelist import whitelist_key
+from app.wallet_status import LONG_RULES
+from common.keys import ALERT_TOPIC, FREEZE_TOPIC, FROZEN_KEY, FROZEN_REASONS_KEY, whitelist_key
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true")
 MONGO_DB = os.getenv("MONGO_DB", "aegis")
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-ALERT_TOPIC = os.getenv("ALERT_TOPIC", "fds.alerts.v1")
-FREEZE_TOPIC = os.getenv("FREEZE_TOPIC", "fds.freezes.v1")
 ALERT_GROUP = os.getenv("ALERT_GROUP", "aegis-alert-consumer")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 
@@ -32,6 +30,13 @@ RISK_LEVELS = {
     "L1": "HIGH", "L2": "HIGH", "L3": "HIGH", "L8": "HIGH",
     "L4": "MEDIUM", "L5": "MEDIUM", "L6": "MEDIUM", "L7": "MEDIUM",
 }
+# 등급 순서. 케이스를 합칠 때 더 높은 등급을 유지한다.
+RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+
+def higher_risk(a, b):
+    """두 등급 중 높은 쪽 (모르는 값이나 None은 가장 낮게 본다)."""
+    return max(a, b, key=lambda level: RISK_ORDER.get(level, -1))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("aegis.alert_consumer")
@@ -85,7 +90,8 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
         update = {
             "$set": {
                 "evidence": merge_evidence(existing["evidence"], alert["evidence"]),
-                "risk_level": risk_level,
+                # 마지막 경보로 덮어쓰지 않고 더 높은 등급을 유지 (CRITICAL 뒤에 MEDIUM이 와도 CRITICAL)
+                "risk_level": higher_risk(existing.get("risk_level"), risk_level),
                 "updated_at": now,
             },
             "$min": {"first_tx_at": first_tx_at},

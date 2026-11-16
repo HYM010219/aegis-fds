@@ -24,19 +24,24 @@
 | 파일 | 컨테이너 | 역할 |
 |---|---|---|
 | `app/main.py` | `aegis-gateway` | 요청 검사 순서, 응답 |
-| `app/holds.py` | `aegis-gateway` | 1단계 R01~R04·R06 계산 (Redis Lua), 3분 보류 |
+| `app/holds.py` | `aegis-gateway` | 1단계 R01~R06 판단 (R05 + Redis Lua), 3분 보류 |
 | `app/store.py` | `aegis-gateway` | Mongo 저장 (거래, 보류 기록, outbox), 인덱스 |
-| `app/blacklist.py` | 게이트웨이, 소비자 | 동결, 블랙리스트, 보류 중 확인 |
-| `app/whitelist.py` | 게이트웨이, 소비자 | 룰별 면제 확인 |
+| `app/wallet_status.py` | 게이트웨이, 소비자 | 동결, R07 블랙리스트, 보류 중 확인 |
+| `app/whitelist.py` | `aegis-gateway` | 룰별 면제 확인 |
+| `common/keys.py` | 전부 | 여러 서비스가 같이 쓰는 토픽 이름, Redis 키, R05 기준 |
 | `app/idempotency.py` | `aegis-gateway` | 중복 요청 확인 (Redis) |
 | `app/publisher.py` | `aegis-publisher` | `outbox_events`를 문서의 `topic`대로 Kafka에 전송 |
 | `app/alert_consumer.py` | `aegis-alert-consumer` | L1~L8 경보 → 케이스 저장, 자동 동결, 동결 이벤트 전송 |
 | `spark/stream.py` | `aegis-spark` | Kafka 토픽 3개 읽기, 경보 전송 |
-| `spark/detector.py` | `aegis-spark` | 분석할 지갑 고르기, Mongo 조회, L1~L8 계산 |
+| `spark/detector.py` | `aegis-spark` | 배치 흐름: 계기 ①②③, 분석할 지갑 고르기, 제외 |
+| `spark/config.py` | `aegis-spark` | 기간 프로필(prod/demo), L1~L8 기준값, 처리량 제한 |
+| `spark/queries.py` | `aegis-spark` | Mongo 조회 (여러 지갑을 한 번에, L2·L3·L6과 L4·L8은 조회를 같이 씀) |
+| `spark/rules.py` | `aegis-spark` | L1~L8 판단 (조회 결과 → 경보, Mongo 없이 테스트 가능) |
 | `seed/` | 직접 실행 | 블랙리스트, 화이트리스트, 동결 목록 등록 |
 
 컨테이너 종류마다 폴더 하나에 `Dockerfile`과 `requirements.txt`를 함께 둔다.
 `app/`은 게이트웨이, Publisher, 경보 소비자가 같은 이미지를 쓰고, 실행 명령만 다르다.
+`common/`은 게이트웨이 이미지에 복사되고(빌드 위치 `fds/`), Spark에는 볼륨으로 연결된다.
 
 ## 1단계: 게이트웨이 검사 순서
 
@@ -159,9 +164,10 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 |---|---|---|
 | 시각 허용 범위 `MAX_CLOCK_SKEW` | 30초 | `app/main.py` |
 | 1단계 기준, 5분, 보류 시간 | R01 5건, R02 3회, R03·R04 5개, 3분 | `app/holds.py` |
-| R05 기준 `WHALE_LIMIT`, 보류 기록 보관 `HOLDS_KEEP_DAYS` | 50,000 USDT, 14일 | `app/store.py` |
+| R05 기준 `WHALE_LIMIT_USDT` (Spark L2도 같이 씀) | 50,000 USDT | `common/keys.py` |
+| 보류 기록 보관 `HOLDS_KEEP_DAYS` | 14일 | `app/store.py` |
 | `transfers` 자동 삭제 `TRANSFERS_TTL_DAYS` | 0 (끔). ClickHouse 연결 후 14 | `docker-compose.yml` (gateway) |
-| 2단계 기준, 기간, 처리량 제한 | L1~L8 숫자, `PROFILES` | `spark/detector.py` |
+| 2단계 기준, 기간, 처리량 제한 | L1~L8 숫자, `PROFILES` | `spark/config.py` |
 | 자동 동결 룰 `AUTO_FREEZE_RULES` | L1, L2, L3, L8 | `app/alert_consumer.py` |
 | 위험도 `RISK_LEVELS` (L5는 등급 사용) | 자동 동결 HIGH, 나머지 MEDIUM | `app/alert_consumer.py` |
 | 사건 분리 기준 `CASE_GAP` | 10분 | `app/alert_consumer.py` |

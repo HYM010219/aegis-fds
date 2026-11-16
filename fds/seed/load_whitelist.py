@@ -4,8 +4,11 @@ from pathlib import Path
 
 import redis
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # fds 폴더 (common/keys.py)
+from common.keys import WHITELIST_RULES, whitelist_key  # noqa: E402
+
 # R01~R06: 게이트웨이 1단계 보류 면제 / L: Spark 2단계(L1~L8) 분석 면제
-RULES = {"R01", "R02", "R03", "R04", "R05", "R06", "L"}
+RULES = set(WHITELIST_RULES)
 LIST_FILE = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "whitelist.txt"
 
 entries = []
@@ -23,7 +26,7 @@ r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, decode_res
 
 for wallet, rules in entries:
     for rule in rules:
-        r.sadd(f"fds:whitelist:{rule}", wallet)
+        r.sadd(whitelist_key(rule), wallet)
 
 for rule in sorted(RULES):
-    print(f"{rule}: 전체 {r.scard(f'fds:whitelist:{rule}')}건")
+    print(f"{rule}: 전체 {r.scard(whitelist_key(rule))}건")

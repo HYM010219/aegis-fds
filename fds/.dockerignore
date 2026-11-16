@@ -1,0 +1,9 @@
+# 게이트웨이 이미지(fds/app/Dockerfile)는 fds 폴더 전체를 빌드 위치로 쓴다. 이미지에 필요한 건 app/과 common/뿐이다.
+logs/
+spark/
+clickhouse/
+seed/
+README.md
+**/__pycache__/
+**/*.pyc
+app/Dockerfile

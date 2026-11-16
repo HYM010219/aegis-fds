@@ -9,13 +9,10 @@ from pymongo.errors import PyMongoError
 
 from app.holds import HOLD_MS
 from app.mongo_client import db, mongo_client
+from common.keys import HOLD_TOPIC, REJECTED_TOPIC, TRANSFER_TOPIC
 
 logger = logging.getLogger("aegis.gateway")
 
-TOPIC = "transfer.events.v1"             # 통과한 거래 → Spark 계기 ②, ClickHouse
-REJECTED_TOPIC = "transfer.rejected.v1"  # 거절된 요청 → ClickHouse 장기 보관 (Spark는 읽지 않음)
-HOLD_TOPIC = "fds.holds.v1"              # 보류, R07 차단 → Spark 계기 ①
-WHALE_LIMIT = Decimal("50000")  # R05 기준 (USDT)
 HOLDS_KEEP_DAYS = 14            # fds_holds 보관 기간 (L1 2주 계산용)
 # transfers 자동 삭제 기간(일). 0이면 지우지 않는다. ClickHouse를 연결한 뒤에 14로 켠다.
 TRANSFERS_TTL_DAYS = int(os.getenv("TRANSFERS_TTL_DAYS", "0"))
@@ -188,7 +185,7 @@ async def execute_transfer(req, body, receiver_hold=None):
         await db.transfers.insert_one(make_record(req, 200, body, now), session=session)
         # 2) Kafka로 보낼 거래 이벤트
         await db.outbox_events.insert_one(
-            make_outbox(req, TOPIC, req.from_address, tx_payload(req), now), session=session
+            make_outbox(req, TRANSFER_TOPIC, req.from_address, tx_payload(req), now), session=session
         )
         # 3) R03, R06: 거래는 통과, 받는 지갑 보류
         if receiver_hold:

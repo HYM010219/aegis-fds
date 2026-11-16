@@ -1,3 +1,8 @@
+"""게이트웨이: 송금 요청을 받아 1단계(R01~R07)를 판단하고, 통과하면 Mongo와 outbox에 저장한다.
+
+    룰 위치  R01~R06: holds.py / R07(+동결, 보류 중): wallet_status.py
+    처리 순서는 create_transfer()의 0) ~ 5) 주석을 보면 된다.
+"""
 import json
 import logging
 import os
@@ -12,20 +17,12 @@ from pydantic import AwareDatetime, BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 from redis.exceptions import RedisError
 
-from app.blacklist import BLACKLISTED_RECEIVER, check_wallets
-from app.holds import HOLD_SECONDS, Decision, Hold, evaluate, hold_key, hold_sender, undo_record
+from app.holds import HOLD_SECONDS, Hold, evaluate, hold_key, undo_record
 from app.idempotency import claim_idempotency, release_idempotency
 from app.mongo_client import mongo_client
 from app.redis_client import redis_client
-from app.store import (
-    WHALE_LIMIT,
-    ensure_indexes,
-    execute_transfer,
-    parse_amount,
-    save_rejected,
-    save_sender_hold,
-)
-from app.whitelist import is_whitelisted
+from app.store import ensure_indexes, execute_transfer, parse_amount, save_rejected, save_sender_hold
+from app.wallet_status import BLACKLISTED_RECEIVER, check_wallets
 
 # ---------- 게이트웨이 보안 ----------
 
@@ -73,7 +70,7 @@ def log_result(req, http_code: int, body: dict, **extra):
         logger.warning(line)
 
 
-# ---------- 앱 ----------
+# ---------- 앱 시작·종료 ----------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,6 +85,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AEGIS-FDS Gateway", lifespan=lifespan)
 
 
+# ---------- 요청 형식 ----------
+
 class TransferRequest(BaseModel):
     # Kafka 인입 규격 필드. from은 파이썬 예약어라 별칭으로 받는다.
     tx_hash: str = Field(min_length=1)
@@ -99,6 +98,8 @@ class TransferRequest(BaseModel):
     block: int = Field(ge=0, le=2**63 - 1)
     timestamp: AwareDatetime
 
+
+# ---------- 거절 응답 ----------
 
 def reject(req, http_code, reason, background_tasks, retry_after=None, block_reason=None):
     body = {"status": "REJECTED", "reason": reason}
@@ -118,16 +119,19 @@ async def reject_with_hold(req, hold: Hold):
     return JSONResponse(status_code=429, content=body, headers={"Retry-After": str(HOLD_SECONDS)})
 
 
+# ---------- 송금 API ----------
+
 @app.post("/api/v1/transfers")
 async def create_transfer(
     req: TransferRequest,
     background_tasks: BackgroundTasks,
     x_api_key: str | None = Header(default=None),
 ):
+    # 0) 요청 검사: API 키(401) / 금액(422) / 시각(422)
     if not is_valid_key(x_api_key):
         return JSONResponse(status_code=401, content={"status": "REJECTED", "reason": "UNAUTHORIZED"})
 
-    # 금액 검사 (잘못된 금액이 집계로 넘어가지 않게 막는다)
+    # 잘못된 금액이 집계로 넘어가지 않게 막는다
     amount = parse_amount(req.amount)
     if amount is None:
         return reject(req, 422, "INVALID_AMOUNT", background_tasks)
@@ -136,7 +140,7 @@ async def create_transfer(
     if abs(datetime.now(timezone.utc) - req.timestamp) > MAX_CLOCK_SKEW:
         return reject(req, 422, "TIMESTAMP_OUT_OF_RANGE", background_tasks)
 
-    # 1) 동결(403) / R07 블랙리스트(403) / 보류 중(429)
+    # 1) 지갑 상태: 동결(403) / R07 블랙리스트(403) / 보류 중(429)  → wallet_status.py
     try:
         block = await check_wallets(redis_client, req.from_address, req.to_address, hold_key(req.from_address))
     except RedisError:
@@ -147,7 +151,7 @@ async def create_transfer(
         return reject(req, block.http_code, block.reason, background_tasks,
                       retry_after=block.retry_after, block_reason=block_reason)
 
-    # 2) 중복 요청 (같은 tx_hash + log_index). R룰 개수가 두 번 오르지 않도록 계산 전에 확인
+    # 2) 중복 요청(409): 같은 tx_hash + log_index. R룰 개수가 두 번 오르지 않도록 계산 전에 확인
     idem_key = f"{req.tx_hash}:{req.log_index}"
     try:
         first_time = await claim_idempotency(redis_client, req.from_address, idem_key)
@@ -163,32 +167,28 @@ async def create_transfer(
         except RedisError:
             pass
 
-    # 3) R05 대량 송금, R01~R04·R06 최근 5분 계산
+    # 3) R01~R06 판단  → holds.py (R05를 먼저 보고, 아니면 Lua로 R01~R04·R06)
     try:
-        if amount >= WHALE_LIMIT and not await is_whitelisted(redis_client, "R05", req.from_address):
-            if await hold_sender(redis_client, req.from_address, "R05"):
-                decision = Decision("HOLD_SENDER", ["R05"], {"amount": str(amount)})
-            else:
-                decision = Decision("HELD", ["R05"])
-        else:
-            decision = await evaluate(redis_client, req, amount, int(time.time() * 1000))
+        decision = await evaluate(redis_client, req, amount, int(time.time() * 1000))
     except RedisError:
         await release()
         return reject(req, 503, "FDS_UNAVAILABLE", background_tasks)
 
+    # 4) 판단 결과 처리
+    # 보내는 지갑이 걸림 (R01·R02·R04·R05): 거래 거절(429) + 보류 기록
     if decision.kind == "HOLD_SENDER":
         await release()
         return await reject_with_hold(req, Hold(req.from_address, decision.rules, "SENDER", decision.evidence))
+    # 동시에 들어온 다른 요청이 먼저 보류를 건 경우 (429)
     if decision.kind == "HELD":
-        # 동시에 들어온 다른 요청이 먼저 보류를 건 경우
         await release()
         return reject(req, 429, f"TEMP_HOLD_{decision.rule}", background_tasks, retry_after=HOLD_SECONDS)
-
+    # 받는 지갑이 걸림 (R03·R06): 거래는 통과, 받는 지갑만 보류 기록
     receiver_hold = None
     if decision.kind == "HOLD_RECEIVER":
         receiver_hold = Hold(req.to_address, decision.rules, "RECEIVER", decision.evidence)
 
-    # 4) 원천 데이터와 outbox 저장. 커밋이 끝난 뒤에 200으로 응답
+    # 5) 통과: 원천 데이터와 outbox 저장. 커밋이 끝난 뒤에 200으로 응답
     body = {"status": "ACCEPTED", "reason": None}
     try:
         await execute_transfer(req, body, receiver_hold)

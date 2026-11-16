@@ -1,11 +1,14 @@
 import os
+import sys
 from pathlib import Path
 
 import redis
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # fds 폴더 (common/keys.py)
+from common.keys import FROZEN_KEY  # noqa: E402
+
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-FROZEN_KEY = "fds:frozen_wallets"
 SEED_FILE = Path(__file__).parent / "frozen.txt"
 
 

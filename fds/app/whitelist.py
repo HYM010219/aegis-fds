@@ -1,15 +1,6 @@
 import redis.asyncio as redis
 
-# 화이트리스트를 둘 수 있는 룰.
-# R01~R06: 게이트웨이 1단계 보류 면제 / L: Spark 2단계(L1~L8) 분석 면제
-WHITELIST_RULES = ("R01", "R02", "R03", "R04", "R05", "R06", "L")
-
-
-def whitelist_key(rule_id: str) -> str:
-    """룰마다 Redis Set을 하나씩 쓴다. 예: fds:whitelist:R05, fds:whitelist:L"""
-    if rule_id not in WHITELIST_RULES:
-        raise ValueError(f"화이트리스트가 없는 룰: {rule_id}")
-    return f"fds:whitelist:{rule_id}"
+from common.keys import whitelist_key
 
 
 async def is_whitelisted(r: redis.Redis, rule_id: str, wallet: str) -> bool:

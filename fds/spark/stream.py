@@ -8,11 +8,14 @@ import time
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from detector import FREEZE_TOPIC, HOLD_TOPIC, PROFILE_NAME, TICK_TOPIC, TRANSFER_TOPIC, Detector  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)                   # detector.py
+sys.path.insert(0, os.path.dirname(HERE))  # common/keys.py (fds 폴더 = 컨테이너의 /app)
+from common.keys import ALERT_TOPIC, FREEZE_TOPIC, HOLD_TOPIC, TRANSFER_TOPIC  # noqa: E402
+from config import PROFILE_NAME, TICK_TOPIC  # noqa: E402
+from detector import Detector  # noqa: E402
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-ALERT_TOPIC = os.getenv("ALERT_TOPIC", "fds.alerts.v1")
 CHECKPOINT = os.getenv("CHECKPOINT_DIR", "/checkpoints/detector")
 # 체크포인트가 없는 첫 시작에서만 쓰인다. latest면 시작 이후 들어온 메시지만 본다.
 STARTING_OFFSETS = os.getenv("STARTING_OFFSETS", "latest")

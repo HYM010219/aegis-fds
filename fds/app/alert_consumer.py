@@ -11,7 +11,7 @@ from pymongo.errors import PyMongoError
 from redis.exceptions import RedisError
 
 from app.wallet_status import LONG_RULES
-from common.keys import ALERT_TOPIC, FREEZE_TOPIC, FROZEN_KEY, FROZEN_REASONS_KEY, whitelist_key
+from common.keys import ALERT_TOPIC, FREEZE_TOPIC, FROZEN_KEY, FROZEN_REASONS_KEY, UNFROZEN_AT_KEY, whitelist_key
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true")
 MONGO_DB = os.getenv("MONGO_DB", "aegis")
@@ -82,6 +82,8 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
             "violator_address": wallet,
             "first_tx_at": {"$lte": last_tx_at + CASE_GAP},
             "last_tx_at": {"$gte": first_tx_at - CASE_GAP},
+            # 동결 해제된 케이스는 끝난 사건이다. 해제 뒤 새로 잡히면 새 케이스로 만든다.
+            "review_status": {"$ne": "UNFROZEN"},
         },
         sort=[("last_tx_at", -1)],
     )
@@ -164,6 +166,11 @@ def handle_alert(alert):
 
     # 2단계 분석에서 면제된 지갑은 저장도 동결도 하지 않는다
     if redis_client.sismember(whitelist_key("L"), wallet):
+        return
+    # 직원이 동결 해제한 지갑: 해제 전 거래가 들어간 경보(해제 직전에 만들어져 늦게 온 것)는 버린다
+    unfrozen_ms = redis_client.hget(UNFROZEN_AT_KEY, wallet)
+    if unfrozen_ms and first_tx_at.timestamp() * 1000 < int(unfrozen_ms):
+        logger.info(f"해제 전 거래 경보 건너뜀 {rule_id} {wallet}")
         return
 
     auto_freeze = rule_id in AUTO_FREEZE_RULES

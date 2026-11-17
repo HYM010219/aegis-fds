@@ -2,7 +2,6 @@
 logs/
 spark/
 clickhouse/
-seed/
 README.md
 **/__pycache__/
 **/*.pyc

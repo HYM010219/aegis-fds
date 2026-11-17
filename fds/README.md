@@ -16,7 +16,9 @@
                                                                        ▼
                                                                   경보 소비자
           ├ L1·L2·L3·L8 → fds_cases 저장 + Redis 동결 → ④ fds.freezes.v1 → Spark
-          └ L4·L5·L6·L7 → fds_cases 저장 (검토 대기) → 관제 직원이 동결 → ④ → Spark
+          └ L4·L5·L6·L7 → fds_cases 저장 (검토 대기)
+                              ↓
+관제 웹 백엔드 → 직원 API (/api/v1/admin) → 수동 동결 → ④ → Spark / 이상 없음 / 동결 해제
 ```
 
 ## 파일
@@ -24,6 +26,7 @@
 | 파일 | 컨테이너 | 역할 |
 |---|---|---|
 | `app/main.py` | `aegis-gateway` | 요청 검사 순서, 응답 |
+| `app/admin.py` | `aegis-gateway` | 직원 API: 동결·해제, 케이스 처리, 블랙리스트·화이트리스트 관리, 지갑 상태 조회 |
 | `app/holds.py` | `aegis-gateway` | 1단계 R01~R06 판단 (R05 + Redis Lua), 3분 보류 |
 | `app/store.py` | `aegis-gateway` | Mongo 저장 (거래, 보류 기록, outbox), 인덱스 |
 | `app/wallet_status.py` | 게이트웨이, 소비자 | 동결, R07 블랙리스트, 보류 중 확인 |
@@ -37,7 +40,6 @@
 | `spark/config.py` | `aegis-spark` | 기간 프로필(prod/demo), L1~L8 기준값, 처리량 제한 |
 | `spark/queries.py` | `aegis-spark` | Mongo 조회 (여러 지갑을 한 번에, L2·L3·L6과 L4·L8은 조회를 같이 씀) |
 | `spark/rules.py` | `aegis-spark` | L1~L8 판단 (조회 결과 → 경보, Mongo 없이 테스트 가능) |
-| `seed/` | 직접 실행 | 블랙리스트, 화이트리스트, 동결 목록 등록 |
 
 컨테이너 종류마다 폴더 하나에 `Dockerfile`과 `requirements.txt`를 함께 둔다.
 `app/`은 게이트웨이, Publisher, 경보 소비자가 같은 이미지를 쓰고, 실행 명령만 다르다.
@@ -125,7 +127,46 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 - 블랙리스트에 오른 뒤의 거래는 R07이 막으므로, CRITICAL·HIGH는 **블랙리스트 등록 전 2주 안의 거래**에서 찾는다 (계기 ③).
 - L8은 화이트리스트(`L`) 지갑과 상대가 200개 넘는 지갑을 거치는 경로는 따라가지 않는다.
 - 자동 동결 사유는 `FROZEN_L1`처럼 룰 ID를 쓴다. 관제 직원이 검토 후 동결할 때도 케이스 룰을 사유로 쓴다.
-- 같은 룰 + 같은 지갑의 경보는 케이스 하나로 합친다. 거래 시각 기준 10분 넘게 끊기면 새 케이스.
+- 같은 룰 + 같은 지갑의 경보는 케이스 하나로 합친다. 거래 시각 기준 10분 넘게 끊기면 새 케이스. 동결 해제된 케이스에는 합치지 않는다.
+- 직원이 동결 해제한 지갑은 **해제 시각 이후 기록만** 다시 분석한다 (`fds:unfrozen_at`). 해제 전 거래로 바로 다시 동결되지 않게 하기 위해서다. L7의 '처음 보낸 상대'는 해제 전 기록까지 보고 판단하고, L6은 해제 후 이틀이 지나야 본다.
+
+## 직원 API (관제 웹 백엔드용)
+
+관제 웹의 **백엔드 서버**가 부른다. 브라우저에서 바로 부르지 않는다. 헤더 `X-Admin-Key` 필요 (`.env`의 `ADMIN_API_KEY`, 송금 키와 다름). 키를 설정하지 않으면 503 `ADMIN_API_DISABLED`.
+
+주소는 전부 `/api/v1/admin`으로 시작한다 (코드는 `app/admin.py`).
+
+| 기능 | 요청 | 하는 일 |
+|---|---|---|
+| 케이스 보고 동결 | `POST /cases/{케이스 _id}/freeze` | 케이스 지갑 동결 (사유 = 케이스 룰 → `FROZEN_L5` 등), `fds.freezes.v1`에 `FREEZE`(`source: MANUAL`) |
+| 이상 없음 | `POST /cases/{케이스 _id}/dismiss` | 검토 대기 케이스만 닫음 (동결 안 함) |
+| 케이스 없이 동결 | `POST /wallets/{지갑}/freeze` | 신고·수사 요청 등으로 바로 동결 (사유 `FROZEN_MANUAL`). 기록용 `MANUAL` 케이스를 만든다 |
+| 동결 해제 | `POST /wallets/{지갑}/unfreeze` | 동결 목록·사유에서 빼고 해제 시각 기록, 동결 케이스를 `UNFROZEN`으로, `UNFREEZE` 이벤트 |
+| 지갑 상태 | `GET /wallets/{지갑}` | 동결 여부·사유, 블랙리스트, 화이트리스트 룰, 보류 중(남은 초), 해제 시각 |
+| 블랙리스트 등록 | `POST /blacklist` `{"wallets": [...]}` | 바로 R07 차단. Spark가 다음 배치에서 상대 지갑 L5 재계산 (계기 ③). 최대 1,000개 |
+| 블랙리스트 해제 | `POST /blacklist/{지갑}/remove` | R07 차단 해제. 이미 만들어진 L5 케이스는 그대로 |
+| 블랙리스트 목록 | `GET /blacklist?q=&page=1&size=50&history=false` | 등록 중인 주소 (`q`: 주소 일부, `history=true`: 해제 기록까지) |
+| 화이트리스트 등록 | `POST /whitelist` `{"wallet": "...", "rules": ["R01", "L"]}` | 고른 룰만 면제. **메모 필수** |
+| 화이트리스트 해제 | `POST /whitelist/{지갑}/remove` `{"rules": [...]}` | 고른 룰 면제만 해제 |
+| 화이트리스트 목록 | `GET /whitelist?q=&rule=L&page=1&size=50&history=false` | 등록 중인 (지갑, 룰) 목록 |
+
+POST 본문에는 공통으로 `"operator": "직원ID"`, `"memo": "사유"`가 들어간다. 성공하면 200 `{"status":"OK", ...}`, 실패하면 `{"status":"ERROR","reason":...}`.
+블랙리스트·화이트리스트 등록은 `added`(새로 등록)와 `already`(이미 등록돼 있던 것)를, 화이트리스트 해제는 `removed`와 `not_listed`를 돌려준다.
+
+| 응답 | 뜻 |
+|---|---|
+| 200 `FROZEN` / `ALREADY_FROZEN` | 동결함 / 이미 다른 룰로 동결돼 있어 직원 판단만 기록 |
+| 200 `DISMISSED` / `UNFROZEN` | 이상 없음 처리 / 동결 해제 (`cases_updated`: 해제로 바뀐 케이스 수) |
+| 401 `UNAUTHORIZED` | 직원 키가 틀림 |
+| 404 `CASE_NOT_FOUND` | 케이스 없음 |
+| 409 `NOT_PENDING` | 검토 대기가 아닌 케이스에 이상 없음 (동결된 케이스는 동결 해제로) |
+| 409 `NOT_FROZEN` / `CONFLICT` | 동결되지 않은 지갑 해제 / 다른 직원이 먼저 처리함 |
+| 409 `NOT_LISTED` | 등록돼 있지 않은 블랙리스트·화이트리스트 해제 |
+| 422 | 본문 형식 오류 (operator 없음, 모르는 룰, 화이트리스트 메모 없음 등) |
+| 503 `FDS_UNAVAILABLE` | Redis·Mongo 장애. 같은 요청을 다시 보내면 남은 부분만 처리된다 |
+
+케이스 `review_status`: `PENDING` 검토 대기 → `FROZEN` 직원 동결 / `DISMISSED` 이상 없음, 동결된 케이스(자동은 `null`, 직원은 `FROZEN`) → 해제하면 `UNFROZEN`.
+처리한 직원과 시각은 `reviewed_by`, `reviewed_at`, `review_memo` (해제는 `unfrozen_by`, `unfrozen_at`, `unfreeze_memo`)에 남는다.
 
 ### 기간 설정 (`PERIOD_PROFILE`)
 
@@ -143,10 +184,12 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 | Mongo | `transfers` | 모든 요청 원본 (통과, 거절). 자동 삭제는 `TRANSFERS_TTL_DAYS`로 켬 (지금 0 = 끔) |
 | Mongo | `fds_holds` | 새로 걸린 보류 (지갑, 룰, 보낸/받은 쪽, 근거). 14일 뒤 자동 삭제 |
 | Mongo | `outbox_events` | Kafka 전송 대기함. 전송 후 24시간 뒤 자동 삭제 |
-| Mongo | `fds_cases` | L1~L8 케이스. 자동 동결(`WALLET_FROZEN`) / 검토 대기(`REVIEW_PENDING`, `review_status: PENDING`) |
+| Mongo | `fds_cases` | L1~L8 케이스. 자동 동결(`WALLET_FROZEN`) / 검토 대기(`REVIEW_PENDING`, `review_status: PENDING`). 직원 처리 상태는 위 직원 API 참고. 케이스 없는 직원 동결은 `rule_id: MANUAL` |
+| Mongo | `fds_blacklist`, `fds_whitelist` | 블랙리스트·화이트리스트 기록 (등록 한 번 = 문서 하나: 주소, 화이트리스트는 룰, 메모, 등록·해제한 직원과 시각). 해제해도 지우지 않고 `active: false` |
 | Redis | `fds:w:send / split / out / in:{지갑}` | 1단계 5분 기록 (6분 뒤 자동 삭제) |
 | Redis | `fds:hold:{지갑}` | 보류 중 (값 = 룰, 3분 뒤 자동 삭제) |
 | Redis | `fds:frozen_wallets`, `fds:frozen_reasons` | 동결 지갑, 사유 (지갑 → L1~L8) |
+| Redis | `fds:unfrozen_at` | 직원이 동결 해제한 시각 (지갑 → ms). Spark는 이 시각 이후 기록만 분석 |
 | Redis | `fds:blacklist_wallets` | 블랙리스트 |
 | Redis | `fds:whitelist:R01` ~ `R06`, `fds:whitelist:L` | 1단계 룰별 면제, 2단계 분석 면제 |
 | Redis | `fds:analyzed:{지갑}`, `fds:analyze_pending` | 재분석 간격, 미룬 지갑 (점수 = 분석할 시각) |
@@ -156,7 +199,7 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 | Kafka | `transfer.rejected.v1` | 거절된 요청 (401 제외). ClickHouse 장기 보관용, Spark는 읽지 않음 |
 | Kafka | `fds.holds.v1` | 1단계 보류(HOLD), R07 차단(BLOCK) |
 | Kafka | `fds.alerts.v1` | Spark L1~L8 경보 |
-| Kafka | `fds.freezes.v1` | 새로 동결된 지갑 |
+| Kafka | `fds.freezes.v1` | 동결(`FREEZE`, 자동 `AUTO` / 직원 `MANUAL`)과 해제(`UNFREEZE`). Spark는 `FREEZE`만 계기 ③으로 씀 |
 
 ## 바꾸기 쉬운 값
 
@@ -180,17 +223,9 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 프로젝트 최상단(`C:\aegis-fds`)에서 실행한다.
 
 ```bash
-# 내 PC에서 시드 스크립트를 처음 쓸 때 패키지 설치
-.venv\Scripts\pip install -r fds\app\requirements.txt
-
-# 블랙리스트, 화이트리스트, 동결 목록 등록 (seed 폴더의 txt 파일 기준)
-.venv\Scripts\python fds\seed\load_blacklist.py
-.venv\Scripts\python fds\seed\load_whitelist.py
-.venv\Scripts\python fds\seed\load_frozen.py
-
-# 지갑 동결 해제 (두 줄 모두 실행)
-docker exec aegis-redis redis-cli SREM fds:frozen_wallets <지갑주소>
-docker exec aegis-redis redis-cli HDEL fds:frozen_reasons <지갑주소>
+# 블랙리스트·화이트리스트 등록과 지갑 동결은 직원 API(위 표)로 한다.
+# 지갑 동결 해제는 직원 API(POST /api/v1/admin/wallets/{지갑}/unfreeze)로 한다.
+# Redis에서 직접 빼면 케이스 기록·해제 이벤트가 남지 않고, 해제 전 거래로 다시 동결될 수 있다.
 
 # 보류 해제 (3분을 기다리지 않을 때)
 docker exec aegis-redis redis-cli DEL fds:hold:<지갑주소>
@@ -215,9 +250,8 @@ docker exec aegis-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localh
 
 ## 주의
 
-- `seed/blacklist.txt`는 한 줄에 주소 하나만 쓴다. 주석 줄도 그대로 등록된다.
-- `seed/whitelist.txt` 형식은 `지갑주소 R01,R03,R05,L`. 거래소 16개는 `L`(2단계 면제)까지, 시뮬레이터 지갑은 지금 실험용으로 R01~R06 면제다.
-- 관제 웹에서 동결할 때는 Redis 동결(사유 = 케이스 룰)과 함께 `fds.freezes.v1`에 `{"event":"FREEZE","wallet":...,"rule":...,"source":"MANUAL"}`을 보내야 계기 ③이 돈다.
+- 지금 Redis 화이트리스트: 거래소 16개는 `L`(2단계 면제)까지, 시뮬레이터 지갑은 실험용으로 R01~R06 면제다. Redis를 비우거나 새 환경을 만들면 직원 API로 다시 등록해야 한다.
+- 관제 웹은 동결·해제를 Redis에 직접 쓰지 않고 직원 API를 부른다 (Redis·이벤트·케이스를 한 번에 처리).
 - Spark를 체크포인트 없이 처음 시작하면 그 이후 들어온 메시지만 읽는다 (`STARTING_OFFSETS=latest`).
-- 게이트웨이는 `.env`에 `GATEWAY_API_KEY`가 없으면 시작하지 않는다.
+- 게이트웨이는 `.env`에 `GATEWAY_API_KEY`가 없으면 시작하지 않는다. `ADMIN_API_KEY`가 없으면 직원 API만 꺼진다.
 - `TRANSFERS_TTL_DAYS`를 0에서 14로 바꾸면 게이트웨이가 시작할 때 14일 지난 `transfers`를 지우기 시작한다. **ClickHouse에 거래·거절 기록이 쌓이는 걸 확인한 뒤에** 켠다. 다시 0으로 바꾸면 자동 삭제를 끈다.

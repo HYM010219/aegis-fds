@@ -1,6 +1,7 @@
 """게이트웨이: 송금 요청을 받아 1단계(R01~R07)를 판단하고, 통과하면 Mongo와 outbox에 저장한다.
 
     룰 위치  R01~R06: holds.py / R07(+동결, 보류 중): wallet_status.py
+    직원 API(수동 동결·이상 없음·동결 해제): admin.py
     처리 순서는 create_transfer()의 0) ~ 5) 주석을 보면 된다.
 """
 import json
@@ -17,6 +18,7 @@ from pydantic import AwareDatetime, BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 from redis.exceptions import RedisError
 
+from app import admin
 from app.holds import HOLD_SECONDS, Hold, evaluate, hold_key, undo_record
 from app.idempotency import claim_idempotency, release_idempotency
 from app.mongo_client import mongo_client
@@ -83,6 +85,8 @@ async def lifespan(app: FastAPI):
     await mongo_client.close()
 
 app = FastAPI(title="AEGIS-FDS Gateway", lifespan=lifespan)
+# 직원 API (수동 동결·이상 없음·동결 해제·지갑 상태)  → admin.py
+admin.install(app)
 
 
 # ---------- 요청 형식 ----------

@@ -85,6 +85,14 @@ async def ensure_indexes():
     await db.fds_cases.create_index([("violator_address", 1), ("detected_at", -1)])
     await db.fds_cases.create_index([("rule_id", 1), ("detected_at", -1)])
 
+    # 블랙리스트·화이트리스트 기록 (직원 API). 해제해도 지우지 않으므로 active인 것만 고유하게.
+    await db.fds_blacklist.create_index("wallet", unique=True, partialFilterExpression={"active": True},
+                                        name="active_wallet")
+    await db.fds_blacklist.create_index([("active", 1), ("added_at", -1)])
+    await db.fds_whitelist.create_index([("wallet", 1), ("rule", 1)], unique=True,
+                                        partialFilterExpression={"active": True}, name="active_wallet_rule")
+    await db.fds_whitelist.create_index([("active", 1), ("rule", 1), ("added_at", -1)])
+
 
 def make_record(req, http_code, body, now):
     amount = parse_amount(req.amount)
@@ -105,9 +113,14 @@ def make_record(req, http_code, body, now):
 
 
 def make_outbox(req, topic, key, payload, now):
+    return outbox_doc(topic, key, payload, now, req.tx_hash, req.log_index)
+
+
+def outbox_doc(topic, key, payload, now, tx_hash=None, log_index=None):
+    """Kafka 전송 대기함 문서. 거래가 없는 이벤트(직원 동결·해제)는 tx_hash 없이 만든다."""
     return {
-        "tx_hash": req.tx_hash,
-        "log_index": req.log_index,
+        "tx_hash": tx_hash,
+        "log_index": log_index,
         "topic": topic,
         "partition_key": key,
         "payload": payload,

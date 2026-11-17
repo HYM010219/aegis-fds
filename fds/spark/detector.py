@@ -4,7 +4,7 @@
     2) 계기 ③                   새로 동결·블랙리스트된 지갑의 상대를 L5 대기 목록에 넣기
     3) 분석할 지갑 고르기        보류 → 간격이 지난 대기 지갑 → 새 거래 순
     4) 빼기                     화이트리스트 L, 동결, 블랙리스트 지갑
-    5) 계산                     조회(queries.py) → 판단(rules.py)
+    5) 계산                     조회(queries.py) → 판단(rules.py). 직원이 동결 해제한 지갑은 해제 이후 거래만
     6) 처리 표시                 재분석 간격 TTL, 대기 목록 정리
 
 기간·기준값은 config.py, 조회는 queries.py, L1~L8 판단은 rules.py.
@@ -21,7 +21,7 @@ from pymongo import MongoClient
 
 import queries
 import rules
-from common.keys import BLACKLIST_KEY, FREEZE_TOPIC, FROZEN_KEY, HOLD_TOPIC, TRANSFER_TOPIC
+from common.keys import BLACKLIST_KEY, FREEZE_TOPIC, FROZEN_KEY, HOLD_TOPIC, TRANSFER_TOPIC, UNFROZEN_AT_KEY
 from config import (
     ANALYZED_PREFIX,
     BLACKLIST_SEEN_KEY,
@@ -65,12 +65,13 @@ class Detector:
         full_targets = [w for w in full if w in targets]
         recheck_targets = [w for w in recheck if w in targets and w not in set(full_targets)]
 
-        # 5) 계산: 전체 분석(L1~L8) + 계기 ③ 상대 지갑(L5만)
+        # 5) 계산: 전체 분석(L1~L8) + 계기 ③ 상대 지갑(L5만). 해제한 지갑은 따로, 해제 시각부터 본다.
+        unfrozen = self._unfrozen_at(full_targets + recheck_targets, now)
         alerts = []
-        if full_targets:
-            alerts += self._analyze_full(full_targets, now)
-        if recheck_targets:
-            alerts += self._analyze_l5(recheck_targets, now)
+        for group, start in self._by_start(full_targets, unfrozen):
+            alerts += self._analyze_full(group, now, start)
+        for group, start in self._by_start(recheck_targets, unfrozen):
+            alerts += self._analyze_l5(group, now, start)
 
         # 6) 처리한 지갑 표시
         pipe = self.r.pipeline(transaction=False)
@@ -119,7 +120,9 @@ class Detector:
                 # 계기 ①: 보류는 간격 없이 바로, R07 차단 시도는 일반 거래처럼 간격 적용
                 (urgent if msg.get("event") == "HOLD" else normal).add(msg["wallet"])
             elif topic == FREEZE_TOPIC and msg.get("wallet"):
-                frozen.add(msg["wallet"])
+                # 계기 ③은 동결만. 직원의 동결 해제(UNFREEZE)는 상대 지갑을 다시 볼 이유가 없다.
+                if msg.get("event", "FREEZE") == "FREEZE":
+                    frozen.add(msg["wallet"])
             else:
                 bad += 1
         return normal, urgent, frozen, bad
@@ -191,26 +194,50 @@ class Detector:
 
     # ---------- 5) 계산: 조회 → 판단 ----------
 
-    def _analyze_full(self, wallets, now):
-        """L1~L8 전부. 조회는 L2·L3·L6이 1번, L4·L8이 1번을 같이 쓴다."""
+    def _unfrozen_at(self, wallets, now):
+        """직원이 최근 2주 안에 동결 해제한 지갑 → 해제 시각. 이 지갑은 해제 이후 거래만 본다 (재동결 방지)."""
+        if not wallets:
+            return {}
+        since = now - PERIOD["long"]
+        out = {}
+        for w, ms in zip(wallets, self.r.hmget(UNFROZEN_AT_KEY, wallets)):
+            if ms:
+                at = datetime.fromtimestamp(int(ms) / 1000, timezone.utc)
+                if at > since:
+                    out[w] = at
+        return out
+
+    @staticmethod
+    def _by_start(wallets, unfrozen):
+        """(지갑 묶음, 조회 시작 시각). 보통 지갑은 한 번에, 해제한 지갑은 하나씩 해제 시각부터."""
+        normal = [w for w in wallets if w not in unfrozen]
+        if normal:
+            yield normal, None
+        for w in wallets:
+            if w in unfrozen:
+                yield [w], unfrozen[w]
+
+    def _analyze_full(self, wallets, now, start=None):
+        """L1~L8 전부. 조회는 L2·L3·L6이 1번, L4·L8이 1번을 같이 쓴다. start: 동결 해제 시각."""
         alerts = []
-        alerts += rules.l1(queries.hold_summary(self.db, wallets, now), now)
-        alerts += rules.l2_l3_l6(queries.sent_summary(self.db, wallets, now), now)
-        alerts += self._analyze_l5(wallets, now)
-        alerts += rules.l7(queries.new_counterparties(self.db, wallets, now), now)
-        big = queries.big_transfers(self.db, wallets, now)
+        alerts += rules.l1(queries.hold_summary(self.db, wallets, now, start), now)
+        history = now - start if start else None
+        alerts += rules.l2_l3_l6(queries.sent_summary(self.db, wallets, now, start), now, history)
+        alerts += self._analyze_l5(wallets, now, start)
+        alerts += rules.l7(queries.new_counterparties(self.db, wallets, now, start), now)
+        big = queries.big_transfers(self.db, wallets, now, start)
         alerts += rules.l4(wallets, big, now)
         white = self.r.smembers(WHITELIST_L_KEY)
         alerts += rules.l8(wallets, big, white, now,
                            transfers_from=lambda senders, since, to=None: queries.transfers_from(self.db, senders, since, to))
         return alerts
 
-    def _analyze_l5(self, wallets, now):
+    def _analyze_l5(self, wallets, now, start=None):
         """L5: 블랙리스트·동결 지갑(분석 지갑 자신은 제외)과 주고받은 거래."""
         black = self.r.smembers(BLACKLIST_KEY)
         frozen = self.r.smembers(FROZEN_KEY)
         risky = sorted((black | frozen) - set(wallets))
         if not risky:
             return []
-        inflow, outflow = queries.risky_flows(self.db, wallets, risky, now)
+        inflow, outflow = queries.risky_flows(self.db, wallets, risky, now, start)
         return rules.l5(inflow, outflow, black, now)

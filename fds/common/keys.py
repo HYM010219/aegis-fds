@@ -1,6 +1,6 @@
 """여러 서비스가 같이 쓰는 이름과 값을 한 곳에 모은 파일.
 
-게이트웨이·경보 소비자(fds/app), Spark(fds/spark), seed 스크립트(fds/seed)가 모두 여기서 가져다 쓴다.
+게이트웨이·경보 소비자(fds/app), Spark(fds/spark)가 모두 여기서 가져다 쓴다.
 값을 바꾸면 모든 곳에 같이 반영된다.
 
 한 서비스 안에서만 쓰는 키(보류·5분 기록·중복 요청 키, Spark 대기 목록 키)는 각 파일에 둔다.
@@ -12,12 +12,14 @@ TRANSFER_TOPIC = "transfer.events.v1"   # 통과한 거래: 게이트웨이 → 
 REJECTED_TOPIC = "transfer.rejected.v1"  # 거절된 요청: 게이트웨이 → ClickHouse (Spark는 읽지 않음)
 HOLD_TOPIC = "fds.holds.v1"              # 1단계 보류, R07 차단: 게이트웨이 → Spark 계기 ①, ClickHouse
 ALERT_TOPIC = "fds.alerts.v1"            # L1~L8 경보: Spark → 경보 소비자, ClickHouse
-FREEZE_TOPIC = "fds.freezes.v1"          # 동결: 경보 소비자 → Spark 계기 ③, ClickHouse
+FREEZE_TOPIC = "fds.freezes.v1"          # 동결(FREEZE)·해제(UNFREEZE): 경보 소비자·직원 API → Spark 계기 ③, ClickHouse
 
 # ---------- Redis 키 (여러 서비스가 같이 읽고 씀) ----------
 FROZEN_KEY = "fds:frozen_wallets"          # 동결된 지갑 (Set)
 FROZEN_REASONS_KEY = "fds:frozen_reasons"  # 지갑별 동결 사유 (Hash: 지갑 → 룰 ID)
 BLACKLIST_KEY = "fds:blacklist_wallets"    # 미리 알려진 위험 주소 (Set)
+# 직원이 동결을 해제한 시각 (Hash: 지갑 → ms). Spark는 이 시각 이후 거래만 다시 분석한다 (해제 직후 재동결 방지).
+UNFROZEN_AT_KEY = "fds:unfrozen_at"
 
 # 화이트리스트를 둘 수 있는 룰.
 # R01~R06: 게이트웨이 1단계 보류 면제 / L: Spark 2단계(L1~L8) 분석 면제

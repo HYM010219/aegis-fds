@@ -3,6 +3,8 @@
 조회 횟수가 부하를 정하므로 룰마다 따로 조회하지 않는다.
 L2·L3·L6은 sent_summary() 한 번을, L4·L8은 big_transfers() 한 번을 같이 쓴다.
 금액은 여기서 float로 바꿔서 돌려준다 (Mongo에는 Decimal128로 저장됨).
+
+start: 직원이 동결 해제한 지갑은 해제 시각(start) 이후 기록만 본다 (해제 전 거래로 다시 동결되지 않게).
 """
 from bson.decimal128 import Decimal128
 
@@ -16,6 +18,12 @@ def num(value):
     if isinstance(value, Decimal128):
         return float(value.to_decimal())
     return float(value)
+
+
+def _since(now, span, start=None):
+    """조회 시작 시각: now - span. 동결 해제 시각(start)이 더 늦으면 그 시각부터."""
+    t = now - span
+    return max(t, start) if start else t
 
 
 # ---------- 계기 ③: 동결·블랙리스트 지갑의 상대 ----------
@@ -37,10 +45,10 @@ def counterparties(db, wallets, now):
 
 # ---------- L1: 보류 기록 ----------
 
-def hold_summary(db, wallets, now):
+def hold_summary(db, wallets, now, start=None):
     """지갑별 2주 보류 횟수 (L1 기준 이상인 지갑만)."""
     return list(db.fds_holds.aggregate([
-        {"$match": {"wallet": {"$in": wallets}, "held_at": {"$gte": now - PERIOD["long"]}}},
+        {"$match": {"wallet": {"$in": wallets}, "held_at": {"$gte": _since(now, PERIOD["long"], start)}}},
         {"$group": {
             "_id": "$wallet",
             "holds": {"$sum": 1},
@@ -55,9 +63,9 @@ def hold_summary(db, wallets, now):
 
 # ---------- L2·L3·L6: 보낸 거래 요약 (조회 1번) ----------
 
-def sent_summary(db, wallets, now):
+def sent_summary(db, wallets, now, start=None):
     """지갑별 보낸 거래 요약: 2주 건수, 하루 건수·합계·최대, 900~990 건수·합계. Mongo가 숫자만 돌려준다."""
-    t_day = now - PERIOD["day"]
+    t_day = _since(now, PERIOD["day"], start)
     in_day = {"$gte": ["$timestamp", t_day]}
     is_split = {"$and": [{"$gte": ["$amount", SPLIT_MIN]}, {"$lte": ["$amount", SPLIT_MAX]}]}
 
@@ -65,7 +73,8 @@ def sent_summary(db, wallets, now):
         return {"$slice": [{"$filter": {"input": field, "cond": {"$ne": ["$$this", None]}}}, MAX_HASHES]}
 
     rows = db.transfers.aggregate([
-        {"$match": {"from": {"$in": wallets}, "status": "ACCEPTED", "timestamp": {"$gte": now - PERIOD["long"]}}},
+        {"$match": {"from": {"$in": wallets}, "status": "ACCEPTED",
+                    "timestamp": {"$gte": _since(now, PERIOD["long"], start)}}},
         {"$group": {
             "_id": "$from",
             "long_count": {"$sum": 1},
@@ -98,12 +107,13 @@ def sent_summary(db, wallets, now):
 
 # ---------- L7: 처음 보낸 상대 ----------
 
-def new_counterparties(db, wallets, now):
-    """지갑별로 하루 안에 처음 보낸 상대 수 (2주 기록 기준 '처음', L7 기준 이상인 지갑만)."""
+def new_counterparties(db, wallets, now, start=None):
+    """지갑별로 하루 안에 처음 보낸 상대 수 (2주 기록 기준 '처음', L7 기준 이상인 지갑만).
+    '처음'인지는 해제 전 기록까지 2주 전체로 판단하고, 세는 건 해제 이후에 처음 보낸 상대만."""
     return list(db.transfers.aggregate([
         {"$match": {"from": {"$in": wallets}, "status": "ACCEPTED", "timestamp": {"$gte": now - PERIOD["long"]}}},
         {"$group": {"_id": {"w": "$from", "c": "$to"}, "first": {"$min": "$timestamp"}}},
-        {"$match": {"first": {"$gte": now - PERIOD["day"]}}},
+        {"$match": {"first": {"$gte": _since(now, PERIOD["day"], start)}}},
         {"$group": {
             "_id": "$_id.w",
             "new_count": {"$sum": 1},
@@ -117,9 +127,9 @@ def new_counterparties(db, wallets, now):
 
 # ---------- L5: 위험 지갑과 주고받은 거래 ----------
 
-def risky_flows(db, wallets, risky, now):
+def risky_flows(db, wallets, risky, now, start=None):
     """(받은 거래 요약, 보낸 거래 요약). 각 줄은 _id={w: 분석 지갑, cp: 위험 지갑}. 통과된 거래만."""
-    base = {"status": "ACCEPTED", "timestamp": {"$gte": now - PERIOD["long"]}}
+    base = {"status": "ACCEPTED", "timestamp": {"$gte": _since(now, PERIOD["long"], start)}}
     group = {
         "count": {"$sum": 1},
         "amount": {"$sum": "$amount"},
@@ -155,13 +165,13 @@ def _transfer(d):
 _FIELDS = {"_id": 0, "from": 1, "to": 1, "amount": 1, "timestamp": 1, "tx_hash": 1}
 
 
-def big_transfers(db, wallets, now):
+def big_transfers(db, wallets, now, start=None):
     """L4, L8용: 분석 지갑이 받은 1,000 USDT 이상 거래 + 분석 지갑이 보낸 거래.
     보낸 거래는 금액 제한 없이 읽는다 (1,000을 받아 900만 넘겨도 L4 경유로 보기 위해)."""
     cursor = db.transfers.find(
         {
             "status": "ACCEPTED",
-            "timestamp": {"$gte": now - PERIOD["long"]},
+            "timestamp": {"$gte": _since(now, PERIOD["long"], start)},
             "$or": [
                 {"from": {"$in": wallets}},
                 {"to": {"$in": wallets}, "amount": {"$gte": BIG_AMOUNT}},

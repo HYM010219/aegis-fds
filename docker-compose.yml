@@ -40,6 +40,7 @@ services:
       - MONGO_URI=${MONGO_URI}
       - MONGO_DB=aegis
       - GATEWAY_API_KEY=${GATEWAY_API_KEY}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}  # 직원 API 키 (관제 웹 백엔드용). 비어 있으면 직원 API만 꺼짐
       - TRANSFERS_TTL_DAYS=0       # transfers 자동 삭제(일). 0 = 끔. ClickHouse 연결 후 14로 켬
     ports:
       - "8000:8000"                # LAN에 열림 → 봇 PC가 접속

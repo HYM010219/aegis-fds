@@ -75,12 +75,12 @@ def l1(hold_rows, now):
 
 # ---------- L2·L3·L6 (보낸 거래 요약 하나를 같이 씀) ----------
 
-def l2_l3_l6(sent_rows, now):
-    """sent_rows: queries.sent_summary() 결과. 지갑마다 L2, L3, L6 순서로 본다."""
+def l2_l3_l6(sent_rows, now, history=None):
+    """sent_rows: queries.sent_summary() 결과. 지갑마다 L2, L3, L6 순서로 본다.
+    history: 조회한 기간 (동결 해제 지갑은 해제 이후라 2주보다 짧다. 없으면 PERIOD["long"])."""
     alerts = []
     for row in sent_rows:
-        for check in (l2, l3, l6):
-            alert = check(row, now)
+        for alert in (l2(row, now), l3(row, now), l6(row, now, history)):
             if alert:
                 alerts.append(alert)
     return alerts
@@ -104,9 +104,12 @@ def l3(row, now):
     return None
 
 
-def l6(row, now):
+def l6(row, now, history=None):
     """L6 급격한 활동 증가: 오늘을 뺀 나머지 기간의 하루 평균과 비교."""
-    days = PERIOD["long"] / PERIOD["day"]
+    days = (history or PERIOD["long"]) / PERIOD["day"]
+    if days < 2:
+        # 동결 해제 후 이틀이 안 됨: 비교할 '평소' 기록이 없어서 보지 않는다
+        return None
     today = row["day_count"]
     baseline = (row["long_count"] - today) / max(days - 1, 1)
     if today >= L6_MIN_COUNT and today >= L6_RATIO * baseline:

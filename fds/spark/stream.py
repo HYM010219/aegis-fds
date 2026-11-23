@@ -60,7 +60,7 @@ ticks = (
 def process_batch(df, batch_id):
     started = time.time()
     rows = [(row.topic, row.value) for row in df.collect()]
-    alerts, stats = detector.process(rows)
+    alerts, stats = detector.process(rows, batch_id=batch_id)
 
     # 3) 경보를 fds.alerts.v1로 보낸다. key를 지갑 주소로 두면 같은 지갑 경보는 순서대로 들어간다.
     if alerts:

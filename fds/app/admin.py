@@ -15,15 +15,18 @@
     POST /blacklist/{wallet}/remove       등록 해제
     GET  /blacklist                       목록 (검색, 페이지)
     화이트리스트 (R01~R06 보류 면제, L = 2단계 분석 면제)
-    POST /whitelist                       지갑 하나에 면제 룰 등록 (메모 필수)
+    POST /whitelist                       지갑 하나에 면제 룰 등록
     POST /whitelist/{wallet}/remove       고른 룰 면제만 해제
     GET  /whitelist                       목록 (검색, 룰, 페이지)
+
+모든 조치(POST)는 operator(직원 ID)와 rationale(사유)이 필수다.
+조치마다 policy_decisions(감사 원장)에 한 줄을 남긴다. 이 원장은 쌓기만 하고 고치거나 지우지 않는다.
 
 케이스 review_status
     PENDING 검토 대기 / FROZEN 직원이 동결 / DISMISSED 이상 없음 / UNFROZEN 동결 해제됨 / None 자동 동결(L1·L2·L3·L8)
 
-처리 순서는 모두 ① Mongo(기록) → ② Redis(실제 검사에 쓰는 값). 게이트웨이·Spark는 Redis만 본다.
-②에서 실패하면 503이 나가고, 같은 요청을 다시 보내면 남은 부분만 처리된다.
+처리 순서는 모두 ① Mongo 트랜잭션(기록 + 감사 원장 + 이벤트) → ② Redis(실제 검사에 쓰는 값).
+게이트웨이·Spark는 Redis만 본다. ②에서 실패하면 503이 나가고, 같은 요청을 다시 보내면 남은 부분만 처리된다.
 블랙리스트·화이트리스트 기록(fds_blacklist, fds_whitelist)은 지우지 않고 active=false로 남겨 이력이 된다.
 """
 import json
@@ -31,6 +34,7 @@ import logging
 import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
@@ -39,7 +43,7 @@ from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
-from pymongo.errors import BulkWriteError, PyMongoError
+from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
 from redis.exceptions import RedisError
 
 from app.holds import hold_key
@@ -100,12 +104,13 @@ def install(app: FastAPI):
 # ---------- 요청 형식 ----------
 
 Wallet = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 WhitelistRule = Literal[WHITELIST_RULES]
 
 
 class Review(BaseModel):
-    operator: str = Field(min_length=1, max_length=64)       # 처리한 직원 ID (웹 백엔드가 로그인 정보로 채움)
-    memo: str | None = Field(default=None, max_length=1000)  # 판단 근거
+    operator: str = Field(min_length=1, max_length=64)  # 처리한 직원 ID (웹 백엔드가 로그인 정보로 채움)
+    rationale: Text                                     # 판단 근거 (필수, 감사 원장에 남음)
 
 
 class BlacklistAdd(Review):
@@ -115,7 +120,6 @@ class BlacklistAdd(Review):
 class WhitelistAdd(Review):
     wallet: Wallet
     rules: list[WhitelistRule] = Field(min_length=1)
-    memo: str = Field(min_length=1, max_length=1000)  # 보안을 약하게 하는 작업이라 사유 필수
 
 
 class WhitelistRemove(Review):
@@ -131,6 +135,25 @@ def _now():
 def _audit(action, **fields):
     logger.info(json.dumps({"time": _now().isoformat(timespec="milliseconds"), "admin": action, **fields},
                            ensure_ascii=False))
+
+
+def _decision(action, wallet, body, now, reason_code, case_id=None, **detail):
+    """policy_decisions(감사 원장) 한 줄: 누가(직원) 언제 어떤 지갑에 무엇을 왜 했는지.
+    자동 동결은 alert_consumer.py가 actor_type SYSTEM으로 같은 형식을 남긴다."""
+    doc = {
+        "decision_id": uuid.uuid4().hex,
+        "case_id": str(case_id) if case_id else None,
+        "wallet": wallet,
+        "action": action,              # FREEZE / UNFREEZE / DISMISS / BLACKLIST_ADD ... (아래 각 API)
+        "actor_type": "ANALYST",
+        "actor_id": body.operator,
+        "reason_code": reason_code,    # FROZEN_L5, UNFREEZE_APPROVED, FALSE_POSITIVE 등
+        "rationale": body.rationale,
+        "created_at": now,
+    }
+    if detail:
+        doc["detail"] = detail
+    return doc
 
 
 async def _find_case(case_id):
@@ -152,6 +175,12 @@ async def _transaction(callback):
     try:
         async with mongo_client.start_session() as session:
             return await session.with_transaction(callback)
+    except DuplicateKeyError:
+        raise AdminError(409, "CONFLICT")  # 같은 등록을 다른 직원이 동시에 함
+    except BulkWriteError as e:
+        if all(err.get("code") == 11000 for err in e.details.get("writeErrors", [])):
+            raise AdminError(409, "CONFLICT")
+        raise AdminError(503, "FDS_UNAVAILABLE")
     except PyMongoError:
         raise AdminError(503, "FDS_UNAVAILABLE")
 
@@ -188,7 +217,7 @@ async def freeze_case(case_id: str, body: Review):
         "action_taken": "WALLET_FROZEN",
         "reviewed_by": body.operator,
         "reviewed_at": now,
-        "review_memo": body.memo,
+        "review_rationale": body.rationale,
         "updated_at": now,
     }
 
@@ -198,20 +227,22 @@ async def freeze_case(case_id: str, body: Review):
     already, current_rule = await _redis(pipe)
 
     # 1) 다른 룰로 이미 동결된 지갑: 직원 판단만 기록 (사유와 이벤트는 처음 동결 그대로)
-    #    직원이 동결을 확인한 것이므로 '확인된 동결'에는 넣는다 (L5 노출 근거)
+    #    직원이 동결을 확인한 것이므로 '확인된 동결'에는 넣는다 (L5_EXPOSURE=confirmed일 때 근거)
     if already:
         pipe = redis_client.pipeline(transaction=False)
         pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)
         await _redis(pipe)
         if status != FROZEN:
-            try:
-                await db.fds_cases.update_one({"_id": case["_id"]}, {"$set": review})
-            except PyMongoError:
-                raise AdminError(503, "FDS_UNAVAILABLE")
+            async def record_only(session):
+                await db.fds_cases.update_one({"_id": case["_id"]}, {"$set": review}, session=session)
+                await db.policy_decisions.insert_one(
+                    _decision("FREEZE", wallet, body, now, frozen_reason(current_rule), case["_id"],
+                              already_frozen=True), session=session)
+            await _transaction(record_only)
         _audit("FREEZE", case_id=case_id, wallet=wallet, rule=rule, operator=body.operator, result="ALREADY_FROZEN")
         return {"status": "OK", "result": "ALREADY_FROZEN", "wallet": wallet, "reason": frozen_reason(current_rule)}
 
-    # 2) Mongo: 케이스 상태 + 동결 이벤트. 이미 FROZEN이면 앞선 요청이 여기까지 끝낸 것이라 건너뛴다.
+    # 2) Mongo: 케이스 상태 + 감사 원장 + 동결 이벤트. 이미 FROZEN이면 앞선 요청이 여기까지 끝낸 것이라 건너뛴다.
     if status != FROZEN:
         async def callback(session):
             # 그사이 다른 직원이 처리했으면 바꾸지 않는다
@@ -219,6 +250,8 @@ async def freeze_case(case_id: str, body: Review):
                                                    {"$set": review}, session=session)
             if result.matched_count == 0:
                 raise AdminError(409, "CONFLICT")
+            await db.policy_decisions.insert_one(
+                _decision("FREEZE", wallet, body, now, frozen_reason(rule), case["_id"]), session=session)
             await db.outbox_events.insert_one(_freeze_event("FREEZE", wallet, rule, body.operator, now),
                                               session=session)
         await _transaction(callback)
@@ -242,8 +275,10 @@ async def dismiss_case(case_id: str, body: Review):
     if case.get("review_status") != PENDING:
         # 자동 동결·직원 동결 케이스는 '동결 해제'로 처리한다
         raise AdminError(409, "NOT_PENDING", review_status=case.get("review_status"))
+    wallet = case["violator_address"]
     now = _now()
-    try:
+
+    async def callback(session):
         result = await db.fds_cases.update_one(
             {"_id": case["_id"], "review_status": PENDING},
             {"$set": {
@@ -251,16 +286,19 @@ async def dismiss_case(case_id: str, body: Review):
                 "action_taken": "NO_ACTION",
                 "reviewed_by": body.operator,
                 "reviewed_at": now,
-                "review_memo": body.memo,
+                "review_rationale": body.rationale,
                 "updated_at": now,
             }},
+            session=session,
         )
-    except PyMongoError:
-        raise AdminError(503, "FDS_UNAVAILABLE")
-    if result.matched_count == 0:
-        raise AdminError(409, "CONFLICT")
+        if result.matched_count == 0:
+            raise AdminError(409, "CONFLICT")
+        await db.policy_decisions.insert_one(
+            _decision("DISMISS", wallet, body, now, "FALSE_POSITIVE", case["_id"], rule=case["rule_id"]),
+            session=session)
+    await _transaction(callback)
 
-    _audit("DISMISS", case_id=case_id, wallet=case["violator_address"], rule=case["rule_id"], operator=body.operator)
+    _audit("DISMISS", case_id=case_id, wallet=wallet, rule=case["rule_id"], operator=body.operator)
     return {"status": "OK", "result": DISMISSED, "case_id": case_id}
 
 
@@ -276,7 +314,7 @@ async def unfreeze_wallet(wallet: str, body: Review):
         raise AdminError(409, "NOT_FROZEN")
     now = _now()
 
-    # 1) Mongo: 이 지갑의 동결 케이스를 '해제됨'으로 + 해제 이벤트
+    # 1) Mongo: 이 지갑의 동결 케이스를 '해제됨'으로 + 감사 원장 + 해제 이벤트
     async def callback(session):
         result = await db.fds_cases.update_many(
             {"violator_address": wallet, "action_taken": "WALLET_FROZEN", "review_status": {"$ne": UNFROZEN}},
@@ -284,11 +322,15 @@ async def unfreeze_wallet(wallet: str, body: Review):
                 "review_status": UNFROZEN,
                 "unfrozen_by": body.operator,
                 "unfrozen_at": now,
-                "unfreeze_memo": body.memo,
+                "unfreeze_rationale": body.rationale,
                 "updated_at": now,
             }},
             session=session,
         )
+        await db.policy_decisions.insert_one(
+            _decision("UNFREEZE", wallet, body, now, "UNFREEZE_APPROVED",
+                      previous_reason=frozen_reason(rule), cases_updated=result.modified_count),
+            session=session)
         await db.outbox_events.insert_one(_freeze_event("UNFREEZE", wallet, rule or "", body.operator, now),
                                           session=session)
         return result.modified_count
@@ -321,14 +363,15 @@ async def freeze_wallet(wallet: str, body: Review):
     pipe.hget(FROZEN_REASONS_KEY, wallet)
     already, current_rule = await _redis(pipe)
     if already:
-        # 자동 동결된 지갑을 직원이 다시 동결 = 확인 (L5 노출 근거에 포함)
+        # 자동 동결된 지갑을 직원이 다시 동결 = 확인 (L5_EXPOSURE=confirmed일 때 근거)
         pipe = redis_client.pipeline(transaction=False)
         pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)
         await _redis(pipe)
         return {"status": "OK", "result": "ALREADY_FROZEN", "wallet": wallet, "reason": frozen_reason(current_rule)}
     now = _now()
 
-    # 1) Mongo: MANUAL 케이스 + 동결 이벤트. 앞선 요청이 여기까지 끝냈으면(동결 중인 MANUAL 케이스가 있으면) 건너뛴다.
+    # 1) Mongo: MANUAL 케이스 + 감사 원장 + 동결 이벤트.
+    #    앞선 요청이 여기까지 끝냈으면(동결 중인 MANUAL 케이스가 있으면) 건너뛴다.
     try:
         case = await db.fds_cases.find_one({"violator_address": wallet, "rule_id": MANUAL_RULE, "review_status": FROZEN})
     except PyMongoError:
@@ -347,7 +390,7 @@ async def freeze_wallet(wallet: str, body: Review):
             "review_status": FROZEN,
             "reviewed_by": body.operator,
             "reviewed_at": now,
-            "review_memo": body.memo,
+            "review_rationale": body.rationale,
             "first_tx_at": None,
             "last_tx_at": None,
             "detected_at": now,
@@ -356,6 +399,8 @@ async def freeze_wallet(wallet: str, body: Review):
 
         async def callback(session):
             await db.fds_cases.insert_one(case, session=session)
+            await db.policy_decisions.insert_one(
+                _decision("FREEZE", wallet, body, now, frozen_reason(MANUAL_RULE), case["_id"]), session=session)
             await db.outbox_events.insert_one(_freeze_event("FREEZE", wallet, MANUAL_RULE, body.operator, now),
                                               session=session)
         await _transaction(callback)
@@ -408,40 +453,28 @@ def _list_doc(wallet, body, now, **extra):
         "wallet": wallet,
         **extra,
         "active": True,
-        "memo": body.memo,
+        "rationale": body.rationale,
         "added_by": body.operator,
         "added_at": now,
         "removed_by": None,
         "removed_at": None,
-        "remove_memo": None,
+        "remove_rationale": None,
     }
 
 
-async def _insert_new(collection, docs):
-    """문서를 넣고, 이미 등록돼 있어서 건너뛴 문서의 순번을 돌려준다."""
-    try:
-        await collection.insert_many(docs, ordered=False)
-        return set()
-    except BulkWriteError as e:
-        errors = e.details.get("writeErrors", [])
-        if any(err.get("code") != 11000 for err in errors):
-            raise AdminError(503, "FDS_UNAVAILABLE")
-        return {err["index"] for err in errors}
-    except PyMongoError:
-        raise AdminError(503, "FDS_UNAVAILABLE")
+async def _active(collection, query, session):
+    """이미 등록 중(active)인 문서들."""
+    return await collection.find({**query, "active": True}, session=session).to_list()
 
 
-async def _deactivate(collection, query, body, now):
+async def _deactivate(collection, query, body, now, session):
     """등록 해제 기록. 해제한 문서 수를 돌려준다."""
-    try:
-        result = await collection.update_many({**query, "active": True}, {"$set": {
-            "active": False,
-            "removed_by": body.operator,
-            "removed_at": now,
-            "remove_memo": body.memo,
-        }})
-    except PyMongoError:
-        raise AdminError(503, "FDS_UNAVAILABLE")
+    result = await collection.update_many({**query, "active": True}, {"$set": {
+        "active": False,
+        "removed_by": body.operator,
+        "removed_at": now,
+        "remove_rationale": body.rationale,
+    }}, session=session)
     return result.modified_count
 
 
@@ -476,13 +509,24 @@ async def add_blacklist(body: BlacklistAdd):
     """등록 즉시 R07로 송금이 막힌다. Spark는 다음 배치에서 새 주소를 찾아 상대 지갑 L5를 다시 계산한다 (계기 ③)."""
     wallets = list(dict.fromkeys(body.wallets))  # 같은 주소가 두 번 오면 하나만
     now = _now()
-    skipped = await _insert_new(db.fds_blacklist, [_list_doc(w, body, now) for w in wallets])
+
+    # 1) Mongo: 아직 등록되지 않은 주소만 기록 + 감사 원장 (주소마다 한 줄)
+    async def callback(session):
+        existing = {d["wallet"] for d in await _active(db.fds_blacklist, {"wallet": {"$in": wallets}}, session)}
+        added = [w for w in wallets if w not in existing]
+        if added:
+            await db.fds_blacklist.insert_many([_list_doc(w, body, now) for w in added], session=session)
+            await db.policy_decisions.insert_many(
+                [_decision("BLACKLIST_ADD", w, body, now, "BLACKLIST_ADD") for w in added], session=session)
+        return added
+    added = await _transaction(callback)
+
+    # 2) Redis: 이미 있던 주소도 다시 넣어 둔다 (기록만 있고 Redis에 없던 경우 복구)
     pipe = redis_client.pipeline(transaction=True)
     pipe.sadd(BLACKLIST_KEY, *wallets)
     await _redis(pipe)
 
-    added = [w for i, w in enumerate(wallets) if i not in skipped]
-    already = [w for i, w in enumerate(wallets) if i in skipped]
+    already = [w for w in wallets if w not in set(added)]
     _audit("BLACKLIST_ADD", wallets=added, already=len(already), operator=body.operator)
     return {"status": "OK", "added": added, "already": already}
 
@@ -493,9 +537,16 @@ async def remove_blacklist(wallet: str, body: Review):
     pipe = redis_client.pipeline(transaction=False)
     pipe.sismember(BLACKLIST_KEY, wallet)
     (listed,) = await _redis(pipe)
-    removed = await _deactivate(db.fds_blacklist, {"wallet": wallet}, body, _now())
-    if not listed and not removed:
-        raise AdminError(409, "NOT_LISTED")
+    now = _now()
+
+    async def callback(session):
+        removed = await _deactivate(db.fds_blacklist, {"wallet": wallet}, body, now, session)
+        if not listed and not removed:
+            raise AdminError(409, "NOT_LISTED")
+        await db.policy_decisions.insert_one(
+            _decision("BLACKLIST_REMOVE", wallet, body, now, "BLACKLIST_REMOVE"), session=session)
+    await _transaction(callback)
+
     pipe = redis_client.pipeline(transaction=True)
     pipe.srem(BLACKLIST_KEY, wallet)
     await _redis(pipe)
@@ -521,14 +572,25 @@ async def add_whitelist(body: WhitelistAdd):
     """고른 룰만 면제. R01~R06은 게이트웨이 보류 면제, L은 Spark 2단계 분석 면제 (R07은 면제 없음)."""
     rules = list(dict.fromkeys(body.rules))
     now = _now()
-    skipped = await _insert_new(db.fds_whitelist, [_list_doc(body.wallet, body, now, rule=r) for r in rules])
+
+    async def callback(session):
+        existing = {d["rule"] for d in await _active(db.fds_whitelist,
+                                                     {"wallet": body.wallet, "rule": {"$in": rules}}, session)}
+        added = [r for r in rules if r not in existing]
+        if added:
+            await db.fds_whitelist.insert_many([_list_doc(body.wallet, body, now, rule=r) for r in added],
+                                               session=session)
+            await db.policy_decisions.insert_one(
+                _decision("WHITELIST_ADD", body.wallet, body, now, "WHITELIST_ADD", rules=added), session=session)
+        return added
+    added = await _transaction(callback)
+
     pipe = redis_client.pipeline(transaction=True)
     for rule in rules:
         pipe.sadd(whitelist_key(rule), body.wallet)
     await _redis(pipe)
 
-    added = [r for i, r in enumerate(rules) if i not in skipped]
-    already = [r for i, r in enumerate(rules) if i in skipped]
+    already = [r for r in rules if r not in set(added)]
     _audit("WHITELIST_ADD", wallet=body.wallet, rules=added, operator=body.operator)
     return {"status": "OK", "wallet": body.wallet, "added": added, "already": already}
 
@@ -542,12 +604,18 @@ async def remove_whitelist(wallet: str, body: WhitelistRemove):
     listed = await _redis(pipe)
     now = _now()
 
-    removed, not_listed = [], []
-    for rule, in_redis in zip(rules, listed):
-        changed = await _deactivate(db.fds_whitelist, {"wallet": wallet, "rule": rule}, body, now)
-        (removed if in_redis or changed else not_listed).append(rule)
-    if not removed:
-        raise AdminError(409, "NOT_LISTED")
+    async def callback(session):
+        removed, not_listed = [], []
+        for rule, in_redis in zip(rules, listed):
+            changed = await _deactivate(db.fds_whitelist, {"wallet": wallet, "rule": rule}, body, now, session)
+            (removed if in_redis or changed else not_listed).append(rule)
+        if not removed:
+            raise AdminError(409, "NOT_LISTED")
+        await db.policy_decisions.insert_one(
+            _decision("WHITELIST_REMOVE", wallet, body, now, "WHITELIST_REMOVE", rules=removed), session=session)
+        return removed, not_listed
+    removed, not_listed = await _transaction(callback)
+
     pipe = redis_client.pipeline(transaction=True)
     for rule in removed:
         pipe.srem(whitelist_key(rule), wallet)

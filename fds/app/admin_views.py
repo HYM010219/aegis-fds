@@ -632,41 +632,48 @@ def _ev(label, value, threshold, unit, op=">="):
 
 
 def _evidence(rule, e, c):
-    """Spark 근거 dict → (FE 막대 목록, 한 줄 요약, 상대 설명)."""
+    """Spark 근거 dict → (FE 막대 목록, 한 줄 요약, 상대 설명).
+    기준값은 케이스에 저장된 criteria(Spark가 판정할 때 쓴 값, STR 초안과 같은 값)를 먼저 쓰고,
+    criteria가 없는 예전 케이스만 아래 상수로 대신한다."""
     p = PERIOD
+    cr = c.get("criteria") or {}
+
+    def th(key, default):
+        return cr.get(key, default)
     if rule == "L1":
         rules = e.get("hold_rules") or []
-        return ([_ev("1단계 보류 횟수", e.get("hold_count"), L1_MIN_HOLDS, "회")],
+        return ([_ev("1단계 보류 횟수", e.get("hold_count"), th("min_holds", L1_MIN_HOLDS), "회")],
                 f"{p['long']} 안에 1단계 보류가 {e.get('hold_count', 0)}번 걸렸습니다 ({' → '.join(rules)}).",
                 f"{rules[0]} 등 보류 {e.get('hold_count', 0)}회" if rules else None)
     if rule == "L2":
-        return ([_ev(f"{p['day']} 누적 송금액", e.get("day_sum"), WHALE_LIMIT_USDT, "USDT"),
-                 _ev("가장 큰 1건 (5만 미만이어야 해당)", e.get("day_max"), WHALE_LIMIT_USDT, "USDT", "<")],
+        return ([_ev(f"{p['day']} 누적 송금액", e.get("day_sum"), th("min_day_sum", WHALE_LIMIT_USDT), "USDT"),
+                 _ev("가장 큰 1건 (5만 미만이어야 해당)", e.get("day_max"), th("each_below", WHALE_LIMIT_USDT), "USDT", "<")],
                 f"{p['day']} 동안 {e.get('day_count', 0)}건으로 나눠 {e.get('day_sum', 0):,.0f} USDT를 보냈고, 한 건도 5만을 넘지 않았습니다.",
                 f"{e.get('day_count', 0)}건 분할")
     if rule == "L3":
-        return ([_ev("900~990 USDT 송금 횟수", e.get("split_count"), L3_MIN_SPLITS, "회")],
+        return ([_ev("900~990 USDT 송금 횟수", e.get("split_count"), th("min_count", L3_MIN_SPLITS), "회")],
                 f"{p['long']} 동안 900~990 USDT 송금이 {e.get('split_count', 0)}번 있었습니다 (합계 {e.get('split_sum', 0):,.0f} USDT).",
                 None)
     if rule == "L4":
-        return ([_ev("받은 뒤 1시간 안에 80% 이상 재송금", e.get("pass_through_count"), L4_MIN_TIMES, "회")],
+        return ([_ev("받은 뒤 1시간 안에 80% 이상 재송금", e.get("pass_through_count"), th("min_times", L4_MIN_TIMES), "회")],
                 f"받은 돈의 80% 이상을 1시간 안에 다시 보낸 일이 {e.get('pass_through_count', 0)}번 있었습니다.",
                 None)
     if rule == "L5":
         ins, outs = e.get("inflow_from_blacklist") or [], e.get("outflow_to_blacklist") or []
         return ([_ev("블랙리스트에서 받은 상대", len(ins), 0, "곳", ">"),
                  _ev("블랙리스트로 보낸 상대", len(outs), 0, "곳", ">"),
-                 _ev("확인된 동결 지갑과 거래한 금액", e.get("frozen_exposure_sum"), L5_MEDIUM_SUM, "USDT")],
-                f"위험 지갑과 거래했습니다: 블랙리스트에서 받음 {len(ins)}곳, 보냄 {len(outs)}곳, 확인된 동결 지갑 노출 {e.get('frozen_exposure_sum', 0):,.0f} USDT ({e.get('grade') or c.get('risk_level')}).",
+                 _ev("동결 지갑과 거래한 금액", e.get("frozen_exposure_sum"), th("medium_frozen_sum", L5_MEDIUM_SUM), "USDT")],
+                f"위험 지갑과 거래했습니다: 블랙리스트에서 받음 {len(ins)}곳, 보냄 {len(outs)}곳, 동결 지갑 노출 {e.get('frozen_exposure_sum', 0):,.0f} USDT ({e.get('grade') or c.get('risk_level')}).",
                 _short((ins or outs)[0].get("wallet")) if (ins or outs) else None)
     if rule == "L6":
         base = e.get("baseline_daily_avg") or 0
-        need = max(L6_MIN_COUNT, L6_RATIO * base)
-        return ([_ev(f"{p['day']} 거래 수 (평소의 {L6_RATIO}배·최소 {L6_MIN_COUNT}건)", e.get("today_count"), need, "건")],
+        ratio, min_count = th("ratio", L6_RATIO), th("min_count", L6_MIN_COUNT)
+        need = max(min_count, ratio * base)
+        return ([_ev(f"{p['day']} 거래 수 (평소의 {ratio}배·최소 {min_count}건)", e.get("today_count"), need, "건")],
                 f"최근 {p['day']} 거래가 {e.get('today_count', 0)}건으로 평소 평균({base})보다 크게 늘었습니다.",
                 None)
     if rule == "L7":
-        return ([_ev(f"{p['day']} 안에 처음 거래한 상대", e.get("new_counterparty_count"), L7_MIN_NEW, "곳")],
+        return ([_ev(f"{p['day']} 안에 처음 거래한 상대", e.get("new_counterparty_count"), th("min_new", L7_MIN_NEW), "곳")],
                 f"{p['day']} 안에 처음 거래하는 상대가 {e.get('new_counterparty_count', 0)}곳 생겼습니다.",
                 None)
     if rule == "L8":
@@ -674,8 +681,8 @@ def _evidence(rule, e, c):
         amounts = e.get("amounts") or [0]
         first, last = c.get("first_tx_at"), c.get("last_tx_at")
         minutes = round((last - first).total_seconds() / 60, 1) if first and last else 0
-        return ([_ev("돌아온 비율", (e.get("return_ratio") or 0) * 100, L8_RETURN_RATIO * 100, "%"),
-                 _ev("가장 작은 1건", min(amounts), BIG_AMOUNT, "USDT"),
+        return ([_ev("돌아온 비율", (e.get("return_ratio") or 0) * 100, th("min_return_ratio", L8_RETURN_RATIO) * 100, "%"),
+                 _ev("가장 작은 1건", min(amounts), th("min_leg_amount", BIG_AMOUNT), "USDT"),
                  _ev("한 바퀴 걸린 시간", minutes, p["day_min"], "분", "<=")],
                 f"{' → '.join(_short(a) for a in path)} 로 {minutes}분 만에 돈이 한 바퀴 돌아 {(e.get('return_ratio') or 0) * 100:.0f}%가 돌아왔습니다.",
                 _short(c.get("counterparty_address")))
@@ -695,7 +702,7 @@ def _case_item(c, origins, amounts):
     decided = None
     if c.get("reviewed_by"):
         decided = {"status": _case_status(c), "actor": c.get("reviewed_by"),
-                   "ts": _epoch_ms(c.get("reviewed_at")), "memo": c.get("review_memo")}
+                   "ts": _epoch_ms(c.get("reviewed_at")), "memo": c.get("review_rationale") or c.get("review_memo")}
     return {
         "case_id": str(c["_id"]),
         "rule_id": rule,
@@ -766,110 +773,54 @@ def _parse_expand(expand: str | list[str] | None) -> list[str]:
 
 
 async def _get_audit_chain(limit: int = 1000) -> list[AuditRow]:
+    """감사 이력 = 케이스 생성(탐지) + 감사 원장 policy_decisions(자동 동결·직원 조치·목록 변경·STR).
+    조치 기록은 admin.py·alert_consumer.py·str_draft.py가 policy_decisions에 한 줄씩 남긴 것을 그대로 쓴다."""
     events = []
+    # policy_decisions action → 화면 action 이름
+    action_name = {"UNFREEZE": "RELEASE", "STR_DRAFT_SAVE": "STR_DRAFT"}
     try:
+        decisions = await db.policy_decisions.find().sort("created_at", 1).limit(5000).max_time_ms(QUERY_MS).to_list()
+        system_frozen = {d.get("case_id") for d in decisions if d.get("actor_type") == "SYSTEM" and d.get("action") == "FREEZE"}
+        for d in decisions:
+            system = d.get("actor_type") == "SYSTEM"
+            action = d.get("action") or "DECISION"
+            note = d.get("rationale") or ""
+            if d.get("reason_code") and d.get("reason_code") not in note:
+                note = f"{d['reason_code']} · {note}" if note else d["reason_code"]
+            events.append({
+                "ts": _epoch_ms(d.get("created_at")),
+                "actor": "SYSTEM (Spark)" if system else (d.get("actor_id") or ""),
+                "action": "AUTO_FREEZE" if system and action == "FREEZE" else action_name.get(action, action),
+                "case_id": d.get("case_id"),
+                "wallet": d.get("wallet"),
+                "note": note,
+            })
+
         cases = await db.fds_cases.find().sort("detected_at", 1).limit(2000).max_time_ms(QUERY_MS).to_list()
         for c in cases:
             cid = str(c["_id"])
             w = c.get("violator_address")
             det_ts = _epoch_ms(c.get("detected_at"))
-            if det_ts is not None:
-                r_name = c.get("rule_name") or ""
-                events.append({
-                    "ts": det_ts,
-                    "actor": "SYSTEM (Spark)",
-                    "action": "CASE_CREATED",
-                    "case_id": cid,
-                    "wallet": w,
-                    "note": f"{c.get('rule_id')} {r_name}".strip(),
-                })
-                if c.get("action_taken") == "WALLET_FROZEN":
-                    events.append({
-                        "ts": det_ts + 1,
-                        "actor": "SYSTEM (Spark)",
-                        "action": "AUTO_FREEZE",
-                        "case_id": cid,
-                        "wallet": w,
-                        "note": f"FROZEN_{c.get('rule_id')}",
-                    })
-            if c.get("reviewed_at") and c.get("reviewed_by"):
-                rev_ts = _epoch_ms(c.get("reviewed_at"))
-                rs = c.get("review_status")
-                act = "FREEZE" if rs == "FROZEN" else ("DISMISS" if rs == "DISMISSED" else "REVIEW")
-                events.append({
-                    "ts": rev_ts,
-                    "actor": c.get("reviewed_by"),
-                    "action": act,
-                    "case_id": cid,
-                    "wallet": w,
-                    "note": c.get("review_memo") or "",
-                })
-            if c.get("unfrozen_at") and c.get("unfrozen_by"):
-                unf_ts = _epoch_ms(c.get("unfrozen_at"))
-                events.append({
-                    "ts": unf_ts,
-                    "actor": c.get("unfrozen_by"),
-                    "action": "RELEASE",
-                    "case_id": cid,
-                    "wallet": w,
-                    "note": c.get("unfreeze_memo") or "",
-                })
-
-        bl_docs = await db.fds_blacklist.find().limit(500).max_time_ms(QUERY_MS).to_list()
-        for b in bl_docs:
-            if b.get("created_at"):
-                events.append({
-                    "ts": _epoch_ms(b.get("created_at")),
-                    "actor": b.get("operator") or "ADMIN",
-                    "action": "BLACKLIST_ADD",
-                    "case_id": None,
-                    "wallet": b.get("wallet"),
-                    "note": b.get("reason") or "R07 SDN 블랙리스트 등재",
-                })
-            if b.get("deactivated_at"):
-                events.append({
-                    "ts": _epoch_ms(b.get("deactivated_at")),
-                    "actor": b.get("deactivated_by") or "ADMIN",
-                    "action": "BLACKLIST_REMOVE",
-                    "case_id": None,
-                    "wallet": b.get("wallet"),
-                    "note": b.get("deactivate_memo") or "블랙리스트 해제",
-                })
-
-        wl_docs = await db.fds_whitelist.find().limit(500).max_time_ms(QUERY_MS).to_list()
-        for wl in wl_docs:
-            rules_val = wl.get("rules")
-            rules_str = ",".join(rules_val) if isinstance(rules_val, list) else str(rules_val or "")
-            if wl.get("created_at"):
-                events.append({
-                    "ts": _epoch_ms(wl.get("created_at")),
-                    "actor": wl.get("operator") or "ADMIN",
-                    "action": "WHITELIST_ADD",
-                    "case_id": None,
-                    "wallet": wl.get("wallet"),
-                    "note": rules_str,
-                })
-            if wl.get("deactivated_at"):
-                events.append({
-                    "ts": _epoch_ms(wl.get("deactivated_at")),
-                    "actor": wl.get("deactivated_by") or "ADMIN",
-                    "action": "WHITELIST_REMOVE",
-                    "case_id": None,
-                    "wallet": wl.get("wallet"),
-                    "note": wl.get("deactivate_memo") or "",
-                })
-
-        pd_docs = await db.policy_decisions.find().limit(500).max_time_ms(QUERY_MS).to_list()
-        for p in pd_docs:
-            ts_val = _epoch_ms(p.get("ts") or p.get("created_at"))
+            if det_ts is None:
+                continue
             events.append({
-                "ts": ts_val,
-                "actor": p.get("actor") or p.get("operator") or "SYSTEM",
-                "action": p.get("action") or "DECISION",
-                "case_id": p.get("case_id"),
-                "wallet": p.get("wallet"),
-                "note": p.get("note") or p.get("memo") or "",
+                "ts": det_ts,
+                "actor": "SYSTEM (Spark)",
+                "action": "CASE_CREATED",
+                "case_id": cid,
+                "wallet": w,
+                "note": f"{c.get('rule_id')} {c.get('rule_name') or ''}".strip(),
             })
+            # 감사 원장이 생기기 전에 자동 동결된 케이스는 케이스 기록으로 보충
+            if c.get("action_taken") == "WALLET_FROZEN" and c.get("rule_id") != "MANUAL" and cid not in system_frozen                     and c.get("review_status") in (None, "UNFROZEN"):
+                events.append({
+                    "ts": det_ts + 1,
+                    "actor": "SYSTEM (Spark)",
+                    "action": "AUTO_FREEZE",
+                    "case_id": cid,
+                    "wallet": w,
+                    "note": f"FROZEN_{c.get('rule_id')}",
+                })
     except PyMongoError:
         pass
 
@@ -1428,7 +1379,8 @@ async def decide_case(case_id: str, body: Decision):
     오류(404·409·503)는 admin.py 가 낸 그대로 돌려준다.
     """
     from app import admin as A                            # 순환 import 방지
-    review = A.Review(operator=body.actor, memo=body.note)
+    # 직원 API는 사유(rationale)가 필수다. 화면에서 비워 보내면 기본 문구로 남긴다 (감사 원장에 그대로 기록)
+    review = A.Review(operator=body.actor, rationale=(body.note or "").strip() or "관제 화면 조치 (사유 미입력)")
     if body.action == "FREEZE":
         r = await A.freeze_case(case_id, review)
     elif body.action == "DISMISS":
@@ -1440,14 +1392,10 @@ async def decide_case(case_id: str, body: Decision):
         case = await A._find_case(case_id)                # 없는 사건이면 404
         A._audit("STR_DRAFT", case_id=case_id, operator=body.actor)
         try:
-            await db.policy_decisions.insert_one({
-                "ts": datetime.now(timezone.utc),
-                "actor": body.actor,
-                "action": "STR_DRAFT",
-                "case_id": case_id,
-                "wallet": case["violator_address"],
-                "note": body.note or "STR 초안 작성",
-            })
+            # 감사 원장 형식(decision_id 포함)은 admin._decision과 같게
+            await db.policy_decisions.insert_one(
+                A._decision("STR_DRAFT_SAVE", case["violator_address"], review, datetime.now(timezone.utc),
+                            "STR_DRAFTED", case["_id"]))
         except PyMongoError:
             pass
         return {"ok": True, "status": None, "result": None}

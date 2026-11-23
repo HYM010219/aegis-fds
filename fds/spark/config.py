@@ -70,15 +70,15 @@ BLACKLIST_SEEN_KEY = "fds:blacklist_seen"    # 이미 계기 ③을 처리한 �
 CONFIRMED_SEEN_KEY = "fds:frozen_confirmed_seen"  # 이미 계기 ③을 처리한 '확인된 동결'
 
 # L5 동결 지갑 노출의 근거
-#   confirmed (기본): 블랙리스트 + 직원이 확인한 동결만. 자동 동결은 근거로 쓰지 않는다 (연쇄 오탐 차단)
-#   all            : 블랙리스트 + 모든 동결 (이전 동작, 비교 측정용)
+#   all (기본)     : 블랙리스트 + 모든 동결 (자동 동결 포함). L5는 검토 대기라 판단은 직원이 한다
+#   confirmed      : 블랙리스트 + 직원이 확인한 동결만 (자동 동결 오탐의 번짐을 줄이는 비교 측정용)
 # L1 보류 카운트 대상 (E안 스위치)
-#   all    (기본): 보내는 쪽 + 받는 쪽 모든 보류 합산 (기준안 A/B 동작)
-#   sender       : 보내는 쪽(side == SENDER) 보류만 합산 (E안: R03 수취인 등 제외)
-L1_HOLD_SIDE = os.getenv("L1_HOLD_SIDE", "all").lower()
+#   sender (기본): 보내는 쪽(side == SENDER) 보류만 합산. 받기만 해서 걸린 보류(R03·R06)로는 동결하지 않는다
+#   all          : 보내는 쪽 + 받는 쪽 모든 보류 합산 (이전 동작, 비교 측정용)
+L1_HOLD_SIDE = os.getenv("L1_HOLD_SIDE", "sender").lower()
 if L1_HOLD_SIDE not in ("all", "sender"):
     raise ValueError(f"L1_HOLD_SIDE는 'all' 또는 'sender'여야 합니다: {L1_HOLD_SIDE}")
 
-L5_EXPOSURE = os.getenv("L5_EXPOSURE", "confirmed")
+L5_EXPOSURE = os.getenv("L5_EXPOSURE", "all")
 if L5_EXPOSURE not in ("confirmed", "all"):
     raise ValueError(f"L5_EXPOSURE는 confirmed 또는 all: {L5_EXPOSURE}")

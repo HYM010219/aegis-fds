@@ -17,7 +17,7 @@ from decimal import Decimal
 import redis.asyncio as redis
 
 from app.whitelist import is_whitelisted
-from common.keys import FROZEN_KEY, R05_LIMIT_USDT, WHALE_LIMIT_USDT, whitelist_key
+from common.keys import FROZEN_KEY, R05_LIMIT_USDT, whitelist_key
 
 # ---------- 공통: 기간 ----------
 LOOKBACK_MS = 5 * 60 * 1000     # 거래 시각 기준 최근 5분

@@ -255,3 +255,23 @@ docker exec aegis-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localh
 - Spark를 체크포인트 없이 처음 시작하면 그 이후 들어온 메시지만 읽는다 (`STARTING_OFFSETS=latest`).
 - 게이트웨이는 `.env`에 `GATEWAY_API_KEY`가 없으면 시작하지 않는다. `ADMIN_API_KEY`가 없으면 직원 API만 꺼진다.
 - `TRANSFERS_TTL_DAYS`를 0에서 14로 바꾸면 게이트웨이가 시작할 때 14일 지난 `transfers`를 지우기 시작한다. **ClickHouse에 거래·거절 기록이 쌓이는 걸 확인한 뒤에** 켠다. 다시 0으로 바꾸면 자동 삭제를 끈다.
+
+
+## 통합 반영 (11/23, DE 브랜치 기능 합침)
+
+| 항목 | 내용 | 위치 |
+|---|---|---|
+| 감사 원장 `policy_decisions` | 자동 동결(SYSTEM)·직원 조치(ANALYST)·블랙/화이트리스트 변경·STR 저장을 한 줄씩 쌓기만 함 (`decision_id` 고유) | `app/admin.py`, `app/alert_consumer.py`, `app/store.py` |
+| 직원 조치 사유 필수 | 요청 본문 `rationale` (없으면 422). 관제 화면 버튼(`POST /cases/{id}/decision`)은 `note`를 넘기고, 비어 있으면 `관제 화면 조치 (사유 미입력)`으로 기록 | `app/admin.py`, `app/admin_views.py` |
+| 감사 이력 화면 (`GET /audit`) | 케이스 생성 + 감사 원장을 읽음 | `app/admin_views.py` |
+| 근거 막대 기준값 | 케이스에 저장된 `criteria`(Spark가 판정에 쓴 값)를 먼저 씀, 없으면 기존 상수 | `app/admin_views.py` |
+| STR 초안 API | `GET`/`PATCH /api/v1/admin/cases/{id}/str-draft` — 케이스 증거·기준값·계산 출처(엔진·설정·배치·시각) 그대로. 프론트 모달은 아직 기존 방식 | `app/str_draft.py` |
+| 실시간 경보 WebSocket | `WS /ws/admin` (헤더 `X-Admin-Key`), 새 케이스·변경을 Mongo change stream으로 보냄. 프론트는 아직 5초 폴링 | `app/live_alerts.py` |
+| [EVAL] 평가 | 봇 정답 라벨 → 룰별 성적표. `EVAL_ENABLED=0`이면 꺼짐 | `app/eval_poc.py` |
+| 429 본문 `retry_after` | 남은 보류 초를 헤더와 본문에 같이 | `app/main.py` |
+| 계산 출처 | Spark 경보에 `criteria`·`alerted_at`·`batch_id`, 케이스에 `criteria`·`source` 저장 | `spark/rules.py`, `spark/detector.py`, `spark/stream.py`, `app/alert_consumer.py` |
+| L8 위험도 | CRITICAL | `app/wallet_status.py` `RISK_LEVELS` |
+| L6 | 평소 기록이 없는 새 지갑은 보지 않음 | `spark/rules.py` |
+| **L5 근거 기본값** | `L5_EXPOSURE=all`(자동 동결 포함, 기존 방식). `confirmed`는 비교 측정용 | `spark/config.py` |
+| **L1 보류 집계 기본값** | `L1_HOLD_SIDE=sender`(보낸 쪽 보류만) | `spark/config.py`, `docker-compose.yml` |
+| 게이트웨이 healthcheck | compose가 `/healthz`를 10초마다 확인 | `docker-compose.yml` |

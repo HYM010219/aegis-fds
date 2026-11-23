@@ -85,6 +85,12 @@ async def ensure_indexes():
     await db.fds_cases.create_index([("violator_address", 1), ("detected_at", -1)])
     await db.fds_cases.create_index([("rule_id", 1), ("detected_at", -1)])
 
+    # 감사 원장: 동결·해제·이상 없음·목록 변경을 한 줄씩 쌓기만 한다 (자동 동결은 경보 소비자가 같은 형식으로)
+    await db.policy_decisions.create_index("decision_id", unique=True)
+    await db.policy_decisions.create_index([("wallet", 1), ("created_at", -1)])
+    await db.policy_decisions.create_index([("case_id", 1), ("created_at", -1)])
+    await db.policy_decisions.create_index([("action", 1), ("created_at", -1)])
+
     # 블랙리스트·화이트리스트 기록 (직원 API). 해제해도 지우지 않으므로 active인 것만 고유하게.
     await db.fds_blacklist.create_index("wallet", unique=True, partialFilterExpression={"active": True},
                                         name="active_wallet")
@@ -108,8 +114,8 @@ def make_record(req, http_code, body, now):
         "http_code": http_code,
         "status": body["status"],
         "reason": body["reason"],
-        "exchange_name": getattr(req, "exchange_name", None),
         "created_at": now,
+        "exchange_name": getattr(req, "exchange_name", None),
     }
 
 

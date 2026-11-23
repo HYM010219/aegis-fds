@@ -48,6 +48,7 @@ services:
       - CLICKHOUSE_DB=aegis
       - PERIOD_PROFILE=demo
       - R05_LIMIT_USDT=${R05_LIMIT_USDT:-50000}
+      - EVAL_ENABLED=${EVAL_ENABLED:-1}   # [EVAL] PoC 평가(봇 정답 → 룰별 성적표). 운영은 0, 뺄 때 이 줄 삭제
     ports:
       - "8000:8000"                # LAN에 열림 → 봇 PC가 접속
     volumes:
@@ -57,6 +58,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy # Redis가 healthy가 된 뒤에 시작
+    healthcheck:                   # /healthz: 프로세스가 살아 있나 (k3s와 같은 주소, /ready는 readinessProbe)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   kafka:
@@ -65,10 +72,11 @@ services:
     environment:
       - KAFKA_NODE_ID=1
       - KAFKA_PROCESS_ROLES=broker,controller
-      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093   # 29092 = ClickHouse SQL(kafka:29092)용
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,INTERNAL://kafka:29092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
       - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
@@ -140,7 +148,7 @@ services:
       - PERIOD_PROFILE=demo        # demo: 20분/5분/1분, prod: 2주/24시간/1시간
       - CHECKPOINT_DIR=/checkpoints/detector
       - STARTING_OFFSETS=latest    # 첫 시작 때 과거 메시지로 동결하지 않도록 새 메시지부터 읽음
-      - L1_HOLD_SIDE=${L1_HOLD_SIDE:-all}
+      - L1_HOLD_SIDE=${L1_HOLD_SIDE:-sender}   # L1 보류 집계: sender(기본, 보낸 쪽 보류만) / all
     volumes:
       - ./fds/spark:/app/spark:ro          # 코드는 이미지에 넣지 않고 연결 (재시작만으로 반영)
       - ./fds/common:/app/common:ro        # 공용 이름·값 (게이트웨이와 같은 파일)

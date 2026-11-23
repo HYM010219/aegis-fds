@@ -341,3 +341,14 @@ if not ALCHEMY_WSS:
 
 
 
+
+
+---
+
+## 11. [DE 통합] DE 브랜치 기능 합침 (11/23)
+- **감사 원장 `policy_decisions`** 추가 (자동 동결·직원 조치·목록 변경·STR 저장), **직원 조치 사유 `rationale` 필수**. 화면 `/decision`은 `note` → `rationale`, 비면 `관제 화면 조치 (사유 미입력)`.
+- **STR 초안 API** `/cases/{id}/str-draft`, **WebSocket** `/ws/admin`, **[EVAL]** 평가 (`EVAL_ENABLED`).
+- Spark 경보·케이스에 **판정 기준값(`criteria`)·계산 출처(`source`: 엔진·설정·배치·시각)** 저장 → 사건 상세 근거 막대·STR 초안이 같은 값.
+- **L8 CRITICAL**, **L6 새 지갑 제외**, **429 본문 `retry_after`**, compose 게이트웨이 healthcheck(`/healthz`).
+- 기본값 변경: **`L5_EXPOSURE=all`** (자동 동결도 L5 근거 — L5는 검토 대기라 직원이 판단), **`L1_HOLD_SIDE=sender`**.
+- 유지: R01 5번째 200+보류, `R05_LIMIT_USDT`, `L1_ACTION`, L8 증거 이름 `path`, ClickHouse `kafka:29092`.

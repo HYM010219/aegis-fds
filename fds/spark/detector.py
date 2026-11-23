@@ -47,8 +47,9 @@ class Detector:
 
     # ================= 배치 처리 =================
 
-    def process(self, messages, now=None):
-        """messages: [(토픽, JSON 문자열), ...]. 돌려주는 값: (경보 목록, 통계)."""
+    def process(self, messages, now=None, batch_id=None):
+        """messages: [(토픽, JSON 문자열), ...]. 돌려주는 값: (경보 목록, 통계).
+        batch_id: Spark 배치 번호. 경보에 남겨 '어느 배치에서 계산한 값인지' 추적한다."""
         now = now or datetime.now(timezone.utc)
         now_ms = int(now.timestamp() * 1000)
 
@@ -78,6 +79,9 @@ class Detector:
             alerts += self._analyze_full(group, now, start)
         for group, start in self._by_start(recheck_targets, unfrozen):
             alerts += self._analyze_l5(group, now, start)
+
+        for a in alerts:
+            a["batch_id"] = batch_id
 
         # 6) 처리한 지갑 표시
         pipe = self.r.pipeline(transaction=False)

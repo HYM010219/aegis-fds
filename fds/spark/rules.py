@@ -35,6 +35,8 @@ from config import (
     PERIOD,
     PROFILE_NAME,
     RULE_NAMES,
+    SPLIT_MAX,
+    SPLIT_MIN,
 )
 
 
@@ -44,8 +46,37 @@ def _iso(dt):
     return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
+def _span(td):
+    """기간을 사람이 읽는 글자로: 14d, 24h, 5m."""
+    s = int(td.total_seconds())
+    if s % 86400 == 0 and s >= 2 * 86400:   # 2일 이상만 일 단위 (24시간은 24h)
+        return f"{s // 86400}d"
+    for unit, size in (("h", 3600), ("m", 60)):
+        if s % size == 0:
+            return f"{s // size}{unit}"
+    return f"{s}s"
+
+
+def criteria(rule):
+    """이 경보를 판정할 때 쓴 기준값과 기간 (config.py 값 그대로). 사건 상세·STR 초안이 '기준 대비 실측'을 이 값으로 보여준다."""
+    long, day, hour = _span(PERIOD["long"]), _span(PERIOD["day"]), _span(PERIOD["hour"])
+    return {
+        "L1": {"window": long, "min_holds": L1_MIN_HOLDS},
+        "L2": {"window": day, "min_day_sum": L2_MIN_DAY_SUM, "each_below": L2_MIN_DAY_SUM},
+        "L3": {"window": long, "amount_min": SPLIT_MIN, "amount_max": SPLIT_MAX, "min_count": L3_MIN_SPLITS},
+        "L4": {"window": long, "forward_within": hour, "min_received": BIG_AMOUNT,
+               "forward_ratio": L4_FORWARD_RATIO, "min_times": L4_MIN_TIMES},
+        "L5": {"window": long, "critical": "블랙리스트에게서 받음", "high": "블랙리스트에게 보냄",
+               "medium_frozen_sum": L5_MEDIUM_SUM},
+        "L6": {"today_window": day, "baseline_window": long, "ratio": L6_RATIO, "min_count": L6_MIN_COUNT},
+        "L7": {"window": day, "history_window": long, "min_new": L7_MIN_NEW},
+        "L8": {"window": day, "min_leg_amount": BIG_AMOUNT, "min_return_ratio": L8_RETURN_RATIO, "max_hops": 3},
+    }[rule]
+
+
 def make_alert(rule, wallet, hashes, first, last, evidence, now, risk=None, counterparty=None):
-    """경보 소비자가 읽는 형식 (fds/app/alert_consumer.py)."""
+    """경보 소비자가 읽는 형식 (fds/app/alert_consumer.py).
+    evidence = 실측값, criteria = 판정 기준값, alerted_at·period_profile(·batch_id는 detector가 붙임) = 계산 출처."""
     unique = sorted({h for h in hashes if h})
     return {
         "rule_id": rule,
@@ -57,7 +88,9 @@ def make_alert(rule, wallet, hashes, first, last, evidence, now, risk=None, coun
         "evidence": evidence,
         "risk_level": risk,
         "counterparty_address": counterparty,
+        "criteria": criteria(rule),
         "period_profile": PROFILE_NAME,
+        "alerted_at": _iso(now),
     }
 
 
@@ -111,6 +144,9 @@ def l6(row, now, history=None):
         # 동결 해제 후 이틀이 안 됨: 비교할 '평소' 기록이 없어서 보지 않는다
         return None
     today = row["day_count"]
+    if row["long_count"] - today <= 0:
+        # 오늘 말고는 기록이 없는 새 지갑: '평소'가 없어 비교하지 않는다 (새 상대 집중은 L7이 본다)
+        return None
     baseline = (row["long_count"] - today) / max(days - 1, 1)
     if today >= L6_MIN_COUNT and today >= L6_RATIO * baseline:
         return make_alert("L6", row["_id"], row["day_hashes"], row["day_first"], row["day_last"], {

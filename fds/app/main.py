@@ -1,9 +1,11 @@
 """게이트웨이: 송금 요청을 받아 1단계(R01~R07)를 판단하고, 통과하면 Mongo와 outbox에 저장한다.
 
     룰 위치  R01~R06: holds.py / R07(+동결, 보류 중): wallet_status.py
-    직원 API(수동 동결·이상 없음·동결 해제): admin.py
+    직원 API(수동 동결·이상 없음·동결 해제): admin.py / 관제 조회 API: admin_views.py
+    STR 초안: str_draft.py / 실시간 경보 WebSocket: live_alerts.py / [EVAL] 평가: eval_poc.py
     처리 순서는 create_transfer()의 0) ~ 5) 주석을 보면 된다.
 """
+import asyncio
 import json
 import logging
 import os
@@ -18,8 +20,8 @@ from pydantic import AwareDatetime, BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 from redis.exceptions import RedisError
 
-from app import admin
-from app import admin_views
+from app import admin, admin_views, live_alerts, str_draft
+from app import eval_poc  # [EVAL] PoC 평가 전용 (운영에서 뺄 때 이 줄과 아래 eval_poc.install 줄 삭제)
 from app.holds import HOLD_SECONDS, Hold, evaluate, hold_key, undo_record
 from app.idempotency import claim_idempotency, release_idempotency
 from app.mongo_client import mongo_client
@@ -81,7 +83,10 @@ async def lifespan(app: FastAPI):
     await ensure_indexes()
     await mongo_client.admin.command("ping")
     logger.info('{"event": "startup", "redis": "ok", "mongo": "ok"}')
+    # 관제 화면 실시간 경보: 새 케이스·케이스 변경을 지켜본다 → live_alerts.py
+    watcher = asyncio.create_task(live_alerts.watch_cases())
     yield
+    watcher.cancel()
     await redis_client.aclose()
     await mongo_client.close()
 
@@ -89,6 +94,12 @@ app = FastAPI(title="AEGIS-FDS Gateway", lifespan=lifespan)
 # 직원 API (수동 동결·이상 없음·동결 해제·지갑 상태)  → admin.py
 admin.install(app)
 admin_views.install(app)
+# STR 작성 근거 초안 (케이스 증거 그대로 + 계산 출처, 분석관 의견 저장)  → str_draft.py
+str_draft.install(app)
+# 실시간 경보 WebSocket /ws/admin  → live_alerts.py
+live_alerts.install(app)
+# [EVAL] 봇 정답 라벨·룰별 성적표. EVAL_ENABLED=0이면 주소가 생기지 않는다 → app/eval_poc.py
+eval_poc.install(app)
 
 
 # ---------- 쿠버네티스 헬스체크 프로브 (무인증) ----------
@@ -130,6 +141,9 @@ class TransferRequest(BaseModel):
 
 def reject(req, http_code, reason, background_tasks, retry_after=None, block_reason=None):
     body = {"status": "REJECTED", "reason": reason}
+    if retry_after:
+        # 보류 중이면 남은 초를 헤더(Retry-After)와 본문에 같이 준다 (프론트는 본문만 읽어도 됨)
+        body["retry_after"] = retry_after
     log_result(req, http_code, body)
     # 응답을 먼저 보내고, 그다음 Mongo에 기록
     background_tasks.add_task(save_rejected, req, http_code, body, block_reason)
@@ -139,7 +153,7 @@ def reject(req, http_code, reason, background_tasks, retry_after=None, block_rea
 
 async def reject_with_hold(req, hold: Hold):
     """보내는 지갑 보류: 거래 거절(429) + 보류 기록 + 보류 이벤트."""
-    body = {"status": "REJECTED", "reason": f"TEMP_HOLD_{hold.rule}"}
+    body = {"status": "REJECTED", "reason": f"TEMP_HOLD_{hold.rule}", "retry_after": HOLD_SECONDS}
     log_result(req, 429, body, hold=hold.rules)
     # 보류 기록은 L1 계산에 쓰이므로 응답 전에 저장한다
     await save_sender_hold(req, 429, body, hold)

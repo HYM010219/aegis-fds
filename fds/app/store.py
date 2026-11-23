@@ -108,6 +108,7 @@ def make_record(req, http_code, body, now):
         "http_code": http_code,
         "status": body["status"],
         "reason": body["reason"],
+        "exchange_name": getattr(req, "exchange_name", None),
         "created_at": now,
     }
 
@@ -189,8 +190,8 @@ def block_event(req, reason, now):
     }, now)
 
 
-async def execute_transfer(req, body, receiver_hold=None):
-    """원천 저장과 outbox 저장을 트랜잭션 하나로 처리한다. 받는 지갑 보류도 같이 기록한다."""
+async def execute_transfer(req, body, receiver_hold=None, sender_hold=None):
+    """원천 저장과 outbox 저장을 트랜잭션 하나로 처리한다. 보류도 같이 기록한다."""
     now = datetime.now(timezone.utc)
 
     async def callback(session):
@@ -200,7 +201,12 @@ async def execute_transfer(req, body, receiver_hold=None):
         await db.outbox_events.insert_one(
             make_outbox(req, TRANSFER_TOPIC, req.from_address, tx_payload(req), now), session=session
         )
-        # 3) R03, R06: 거래는 통과, 받는 지갑 보류
+        # 3) R01 5번째: 거래는 통과, 보내는 지갑 보류 기록
+        if sender_hold:
+            record, event = hold_docs(req, sender_hold, now)
+            await db.fds_holds.insert_one(record, session=session)
+            await db.outbox_events.insert_one(event, session=session)
+        # 4) R03, R06: 거래는 통과, 받는 지갑 보류 기록
         if receiver_hold:
             record, event = hold_docs(req, receiver_hold, now)
             await db.fds_holds.insert_one(record, session=session)

@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS aegis.transfers_kafka
     created_at Nullable(String)
 )
 ENGINE = Kafka
-SETTINGS kafka_broker_list = 'kafka:9092',
+SETTINGS kafka_broker_list = 'kafka:29092',
          kafka_topic_list = 'transfer.events.v1,transfer.rejected.v1',
          kafka_group_name = 'clickhouse-transfers',
          kafka_format = 'JSONEachRow',

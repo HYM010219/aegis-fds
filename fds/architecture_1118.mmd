@@ -1,0 +1,60 @@
+flowchart TB
+  %% Aegis-FDS PoC 아키텍처 (DE·FE 브랜치 코드 기준, 11/18) — 실선: 동작 / 점선: outbox 경유·To-Be
+
+  subgraph SRC["📥 데이터 입구 · INFRA(아키텍트)"]
+    direction LR
+    COL["collector_alchemy.py<br/>실데이터 재생 · timestamp=현재"]
+    BOT["bot2 정상 · bot3 공격"]
+  end
+
+  subgraph FEG["💻 FE · Vite :8080"]
+    direction LR
+    SIM["시뮬레이터"]
+    CON["관제 콘솔 /admin"]
+  end
+
+  subgraph GW["🚪 FastAPI 게이트웨이 :8000 · BE(아키텍트) · 한 프로세스"]
+    direction LR
+    MAIN["main.py<br/>요청 검사·1단계 판정"]
+    STATUS["wallet_status.py<br/>동결·R07·보류 중"]
+    HOLDS["holds.py<br/>R01~R06 Lua·3분 보류"]
+    STORE["store.py<br/>원장+outbox 트랜잭션"]
+    ADMIN["admin.py<br/>직원 API·조회 API"]
+  end
+
+  subgraph DATA["🗄️ 저장소 · 운영 INFRA(아키텍트)"]
+    direction LR
+    REDIS[("Redis 7.4<br/>5분 기록·보류·동결<br/>블랙·화이트리스트")]
+    MONGO[("MongoDB 7.0 rs0<br/>transfers·fds_holds<br/>outbox_events·fds_cases")]
+  end
+
+  subgraph DE["⚙️ 탐지 파이프라인 · DE"]
+    direction LR
+    PUB["publisher.py<br/>outbox → Kafka"]
+    KAFKA["Kafka 4.3.1 · 토픽 5개×3파티션<br/>(토픽 운영 INFRA)"]
+    SPARK["Spark Structured Streaming<br/>10초 배치 · L1~L8 규칙 기반"]
+    ALERT["alert_consumer.py<br/>케이스 저장·자동 동결"]
+  end
+
+  CH[("ClickHouse<br/>장기 보관 · To-Be")]
+
+  COL -->|"POST /transfers · X-API-Key"| MAIN
+  BOT --> MAIN
+  SIM -->|"프록시 · X-API-Key"| MAIN
+  CON -->|"프록시 · X-Admin-Key"| ADMIN
+
+  MAIN --> STATUS & HOLDS & STORE
+  STATUS & HOLDS & ADMIN <--> REDIS
+  STORE -->|"ACID"| MONGO
+  ADMIN <-->|"케이스 조회·처리<br/>FREEZE·UNFREEZE outbox"| MONGO
+
+  MONGO -.->|"outbox 읽기"| PUB
+  PUB --> KAFKA
+  KAFKA -->|"① holds ② events ③ freezes"| SPARK
+  SPARK -->|"fds.alerts"| KAFKA
+  KAFKA -->|"fds.alerts"| ALERT
+  ALERT -->|"fds.freezes AUTO → 트리거 ③"| KAFKA
+  SPARK <-->|"최근 2주 조회 · 병목 후보 9.2.1"| MONGO
+  SPARK <-->|"화이트리스트 L·제외·대기 목록"| REDIS
+  ALERT -->|"케이스·동결"| MONGO & REDIS
+  KAFKA -.->|"4개 토픽 장기 보관"| CH

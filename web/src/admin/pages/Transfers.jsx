@@ -33,8 +33,8 @@ function Gateway({ query }) {
   const columns = useMemo(() => [
     { accessorKey: "ts", header: "시각", cell: (i) => <span className="mono">{clock(i.getValue())}</span> },
     { accessorKey: "source", header: "출처", cell: (i) => <span className="c-muted">{i.getValue()}</span> },
-    { accessorKey: "from", header: "보낸 지갑", enableSorting: false, cell: (i) => <span className="who"><Addr a={i.getValue()} /><OriginTag origin={i.row.original.fromOrigin} /></span> },
-    { accessorKey: "to", header: "받은 지갑", enableSorting: false, cell: (i) => <span className="who"><Addr a={i.getValue()} /><OriginTag origin={i.row.original.toOrigin} /></span> },
+    { accessorKey: "from", header: "보낸 지갑", enableSorting: false, cell: (i) => <span className="who"><Addr a={i.getValue()} />{i.row.original.fromLabel && <span className="otag" title={i.row.original.fromLabel}>{i.row.original.fromLabel}</span>}<OriginTag origin={i.row.original.fromOrigin} /></span> },
+    { accessorKey: "to", header: "받은 지갑", enableSorting: false, cell: (i) => <span className="who"><Addr a={i.getValue()} />{i.row.original.toLabel && <span className="otag" title={i.row.original.toLabel}>{i.row.original.toLabel}</span>}<OriginTag origin={i.row.original.toOrigin} /></span> },
     { accessorKey: "amount", header: "금액", cell: (i) => <Money v={i.getValue()} unit={false} />, meta: { right: true } },
     { accessorKey: "result", header: "판정", cell: (i) => { const r = RESULTS[i.getValue()]; return <span className={r.cls} title={r.desc}>{r.label}</span>; } },
     { accessorKey: "rule", header: "룰", cell: (i) => (i.getValue() ? <Rule id={i.getValue()} /> : <span className="c-dim">—</span>) },

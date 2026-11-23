@@ -19,6 +19,7 @@ from pymongo.errors import DuplicateKeyError
 from redis.exceptions import RedisError
 
 from app import admin
+from app import admin_views
 from app.holds import HOLD_SECONDS, Hold, evaluate, hold_key, undo_record
 from app.idempotency import claim_idempotency, release_idempotency
 from app.mongo_client import mongo_client
@@ -87,6 +88,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AEGIS-FDS Gateway", lifespan=lifespan)
 # 직원 API (수동 동결·이상 없음·동결 해제·지갑 상태)  → admin.py
 admin.install(app)
+admin_views.install(app)
+
+
+# ---------- 쿠버네티스 헬스체크 프로브 (무인증) ----------
+
+@app.get("/healthz")
+async def healthz():
+    """Liveness probe: 프로세스 생존 및 FastAPI 웹서버 응답 확인."""
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness probe: Redis 및 MongoDB 정상 핑 확인."""
+    try:
+        await redis_client.ping()
+        await mongo_client.admin.command("ping")
+        return {"status": "ready"}
+    except Exception as e:
+        logger.error(f"Readiness check failed: {type(e).__name__} {e}")
+        return JSONResponse(status_code=503, content={"status": "not_ready", "reason": type(e).__name__})
 
 
 # ---------- 요청 형식 ----------
@@ -101,6 +123,7 @@ class TransferRequest(BaseModel):
     amount: float
     block: int = Field(ge=0, le=2**63 - 1)
     timestamp: AwareDatetime
+    exchange_name: str | None = None
 
 
 # ---------- 거절 응답 ----------
@@ -179,7 +202,7 @@ async def create_transfer(
         return reject(req, 503, "FDS_UNAVAILABLE", background_tasks)
 
     # 4) 판단 결과 처리
-    # 보내는 지갑이 걸림 (R01·R02·R04·R05): 거래 거절(429) + 보류 기록
+    # 보내는 지갑이 걸림 (R02·R04·R05 또는 6건째 이후 R01): 거래 거절(429) + 보류 기록
     if decision.kind == "HOLD_SENDER":
         await release()
         return await reject_with_hold(req, Hold(req.from_address, decision.rules, "SENDER", decision.evidence))
@@ -187,15 +210,26 @@ async def create_transfer(
     if decision.kind == "HELD":
         await release()
         return reject(req, 429, f"TEMP_HOLD_{decision.rule}", background_tasks, retry_after=HOLD_SECONDS)
-    # 받는 지갑이 걸림 (R03·R06): 거래는 통과, 받는 지갑만 보류 기록
+
+    sender_hold = None
     receiver_hold = None
-    if decision.kind == "HOLD_RECEIVER":
-        receiver_hold = Hold(req.to_address, decision.rules, "RECEIVER", decision.evidence)
+    if decision.kind in ("HOLD_SENDER_PASS", "HOLD_BOTH_PASS"):
+        sender_hold = Hold(req.from_address, ["R01"], "SENDER", decision.evidence)
+    if decision.kind in ("HOLD_RECEIVER", "HOLD_BOTH_PASS"):
+        receiver_rules = [r for r in decision.rules if r != "R01"]
+        receiver_hold = Hold(req.to_address, receiver_rules, "RECEIVER", decision.evidence)
 
     # 5) 통과: 원천 데이터와 outbox 저장. 커밋이 끝난 뒤에 200으로 응답
+    now = datetime.now(timezone.utc)
     body = {"status": "ACCEPTED", "reason": None}
+    if sender_hold:
+        until = now + timedelta(seconds=HOLD_SECONDS)
+        body["hold_applied"] = True
+        body["hold_rule"] = "R01"
+        body["hold_until"] = until.isoformat()
+
     try:
-        await execute_transfer(req, body, receiver_hold)
+        await execute_transfer(req, body, receiver_hold=receiver_hold, sender_hold=sender_hold)
     except Exception as e:
         if isinstance(e, DuplicateKeyError):
             # Redis 키가 사라져도 Mongo 고유 인덱스가 중복 저장을 막는다
@@ -211,8 +245,11 @@ async def create_transfer(
                 pass
         return reject(req, http_code, reason, background_tasks)
 
+    log_extra = {}
+    if sender_hold:
+        log_extra["sender_hold"] = sender_hold.rules
     if receiver_hold:
-        log_result(req, 200, body, receiver_hold=receiver_hold.rules)
-    else:
-        log_result(req, 200, body)
+        log_extra["receiver_hold"] = receiver_hold.rules
+
+    log_result(req, 200, body, **log_extra)
     return body

@@ -29,8 +29,13 @@ const save = (w) => store.set(KEY, w);
 
 export async function getWallet() {
   if (isLive()) {
-    const r = await fetch(`${C.API_BASE}/api/v1/wallets/${loadWallet().address}`);
-    return r.json();
+    try {
+      const r = await fetch(`${C.API_BASE}/api/v1/wallets/${loadWallet().address}`);
+      if (r.ok) {
+        const data = await r.json();
+        if (data && Array.isArray(data.history)) return data;
+      }
+    } catch {}
   }
   return { ...loadWallet() };
 }

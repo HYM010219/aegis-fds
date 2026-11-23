@@ -24,7 +24,9 @@ RETRY_INTERVAL = 3                # 오류가 났을 때 쉬는 시간(초)
 CASE_GAP = timedelta(minutes=10)  # 거래 시각 기준으로 이 시간 넘게 끊기면 새 사건
 
 # 자동 동결할 룰. 나머지(L4~L7)는 케이스만 만들고 관제 직원이 검토 후 동결한다.
-AUTO_FREEZE_RULES = {"L1", "L2", "L3", "L8"}
+# C안 환경변수 스위치: L1_ACTION=review 이면 L1을 AUTO_FREEZE_RULES에서 제외 (기본값: freeze)
+L1_ACTION = os.getenv("L1_ACTION", "freeze").lower()
+AUTO_FREEZE_RULES = {"L2", "L3", "L8"} if L1_ACTION == "review" else {"L1", "L2", "L3", "L8"}
 # 위험도 기본값. L5는 Spark가 보낸 등급(CRITICAL, HIGH, MEDIUM)을 쓴다.
 RISK_LEVELS = {
     "L1": "HIGH", "L2": "HIGH", "L3": "HIGH", "L8": "HIGH",

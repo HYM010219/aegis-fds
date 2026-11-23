@@ -17,7 +17,7 @@ from decimal import Decimal
 import redis.asyncio as redis
 
 from app.whitelist import is_whitelisted
-from common.keys import FROZEN_KEY, WHALE_LIMIT_USDT, whitelist_key
+from common.keys import FROZEN_KEY, R05_LIMIT_USDT, WHALE_LIMIT_USDT, whitelist_key
 
 # ---------- 공통: 기간 ----------
 LOOKBACK_MS = 5 * 60 * 1000     # 거래 시각 기준 최근 5분
@@ -31,7 +31,7 @@ R02_MIN_SPLITS = 3              # R02 쪼개기: 900~990 USDT 송금 3회 이상
 R02_MIN, R02_MAX = 900, 990
 R03_MIN_SENDERS = 5             # R03 집금: 서로 다른 보낸 지갑 5개 이상
 R04_MIN_RECEIVERS = 5           # R04 분산: 서로 다른 받는 지갑 5개 이상
-WHALE_LIMIT = Decimal(WHALE_LIMIT_USDT)  # R05 대량 송금: 5만 이상 (금액 비교는 Decimal로)
+WHALE_LIMIT = Decimal(R05_LIMIT_USDT)  # R05 대량 송금: 5만 이상 (금액 비교는 Decimal로)
 # R06 핑퐁은 기준 숫자 없음 (5분 안에 되돌려 보냈는지만 본다)
 
 # Lua 안에서 화이트리스트를 확인하는 룰 (R05는 Lua 밖에서 확인)
@@ -88,8 +88,16 @@ if is_split then splits = count_with(K_SPLIT_FROM, tx) end
 local receivers = count_with(K_OUT_FROM, to)
 
 local hits = {}
--- R01 초고빈도: 5분 송금 수
-if sends >= R01_MIN and not exempt(W_R01, from) then table.insert(hits, 'R01') end
+local r01_5th = false
+
+-- R01 초고빈도: 5분 송금 수 (5건째는 200 승인+HOLD 시작, 6건째부터 429)
+if sends >= R01_MIN and not exempt(W_R01, from) then
+  if sends == R01_MIN then
+    r01_5th = true
+  else
+    table.insert(hits, 'R01')
+  end
+end
 -- R02 쪼개기: 5분 900~990 송금 수
 if is_split and splits >= R02_MIN and not exempt(W_R02, from) then table.insert(hits, 'R02') end
 -- R04 분산: 5분 동안 보낸 서로 다른 지갑 수
@@ -97,15 +105,28 @@ if receivers >= R04_MIN and not exempt(W_R04, from) then table.insert(hits, 'R04
 
 if #hits > 0 then
   redis.call('SET', K_HOLD_FROM, hits[1], 'PX', hold_ms)
+  -- R02면 fds:w:split DEL 리셋 (v2.4 스펙)
+  for _, h in ipairs(hits) do
+    if h == 'R02' then redis.call('DEL', K_SPLIT_FROM) end
+  end
   return {'HOLD_SENDER', table.concat(hits, ','), sends, splits, receivers, 0}
 end
 
--- 2) 통과: 5분 기록에 추가 (서로 다른 지갑은 가장 최근 시각으로 갱신)
-redis.call('ZADD', K_SEND_FROM, ts, tx)
-if is_split then redis.call('ZADD', K_SPLIT_FROM, ts, tx) end
+-- 2) 통과: 5분 기록에 추가
+if r01_5th then
+  -- R01 5번째 송금: 거래는 통과시키되 3분 HOLD 설정 및 fds:w:send DEL 리셋!
+  redis.call('SET', K_HOLD_FROM, 'R01', 'PX', hold_ms)
+  redis.call('DEL', K_SEND_FROM)
+else
+  redis.call('ZADD', K_SEND_FROM, ts, tx)
+  redis.call('PEXPIRE', K_SEND_FROM, keep)
+end
+
+if is_split then redis.call('ZADD', K_SPLIT_FROM, ts, tx) redis.call('PEXPIRE', K_SPLIT_FROM, keep) end
 redis.call('ZADD', K_OUT_FROM, 'GT', ts, to)
+redis.call('PEXPIRE', K_OUT_FROM, keep)
 redis.call('ZADD', K_IN_TO, 'GT', ts, from)
-for i = 1, 4 do redis.call('PEXPIRE', KEYS[i], keep) end
+redis.call('PEXPIRE', K_IN_TO, keep)
 
 -- 3) 받는 지갑 룰: 거래는 통과시키고 받는 지갑만 보류한다 (입금은 항상 허용, 동결 지갑은 제외)
 local senders = redis.call('ZCOUNT', K_IN_TO, lo, '+inf')
@@ -119,7 +140,19 @@ if from ~= to and redis.call('SISMEMBER', K_FROZEN, to) == 0 then
 end
 -- 이미 보류 중인 받는 지갑은 다시 보류하지 않는다
 if #rhits > 0 and redis.call('SET', K_HOLD_TO, rhits[1], 'PX', hold_ms, 'NX') then
-  return {'HOLD_RECEIVER', table.concat(rhits, ','), sends, splits, receivers, senders}
+  -- R03이면 fds:w:in DEL 리셋 (v2.4 스펙)
+  for _, rh in ipairs(rhits) do
+    if rh == 'R03' then redis.call('DEL', K_IN_TO) end
+  end
+  if r01_5th then
+    return {'HOLD_BOTH_PASS', 'R01,' .. table.concat(rhits, ','), sends, splits, receivers, senders}
+  else
+    return {'HOLD_RECEIVER', table.concat(rhits, ','), sends, splits, receivers, senders}
+  end
+end
+
+if r01_5th then
+  return {'HOLD_SENDER_PASS', 'R01', sends, splits, receivers, senders}
 end
 return {'PASS', '', sends, splits, receivers, senders}
 """

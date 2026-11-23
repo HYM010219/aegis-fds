@@ -21,10 +21,13 @@ from pymongo import MongoClient
 
 import queries
 import rules
-from common.keys import BLACKLIST_KEY, FREEZE_TOPIC, FROZEN_KEY, HOLD_TOPIC, TRANSFER_TOPIC, UNFROZEN_AT_KEY
+from common.keys import (BLACKLIST_KEY, CONFIRMED_FROZEN_KEY, FREEZE_TOPIC, FROZEN_KEY, HOLD_TOPIC, TRANSFER_TOPIC,
+                         UNFROZEN_AT_KEY)
 from config import (
     ANALYZED_PREFIX,
     BLACKLIST_SEEN_KEY,
+    CONFIRMED_SEEN_KEY,
+    L5_EXPOSURE,
     MAX_WALLETS_PER_BATCH,
     PENDING_KEY,
     PERIOD,
@@ -53,6 +56,9 @@ class Detector:
         normal, urgent, frozen, bad = self._collect(messages)
 
         # 2) 계기 ③: 새로 동결되거나 블랙리스트에 오른 지갑의 상대를 L5 대기 목록에 넣기
+        #    confirmed 모드: 자동 동결 이벤트는 쓰지 않고, 새로 '확인된 동결'만 (L5 근거와 같은 기준)
+        if L5_EXPOSURE == "confirmed":
+            frozen = self._new_members(CONFIRMED_FROZEN_KEY, CONFIRMED_SEEN_KEY)
         frozen |= self._new_blacklist()
         queued = self._queue_recheck(frozen, now, now_ms) if frozen else 0
 
@@ -92,6 +98,7 @@ class Detector:
             "cooling": cooling,
             "l5_recheck": len(recheck_targets),
             "recheck_queued": queued,
+            "l5_exposure": L5_EXPOSURE,
             "alerts": len(alerts),
             "pending_size": pending_size,
             "recheck_size": recheck_size,
@@ -131,13 +138,17 @@ class Detector:
 
     def _new_blacklist(self):
         """블랙리스트는 스크립트로 Redis에 직접 넣으므로 Kafka 대신 이전 목록과 비교해 새 주소를 찾는다."""
-        new = self.r.sdiff(BLACKLIST_KEY, BLACKLIST_SEEN_KEY)
-        gone = self.r.sdiff(BLACKLIST_SEEN_KEY, BLACKLIST_KEY)
+        return self._new_members(BLACKLIST_KEY, BLACKLIST_SEEN_KEY)
+
+    def _new_members(self, key, seen_key):
+        """Set에 새로 들어온 주소. 이전 목록(seen_key)과 비교한다 (빠진 주소는 seen에서도 뺀다)."""
+        new = self.r.sdiff(key, seen_key)
+        gone = self.r.sdiff(seen_key, key)
         pipe = self.r.pipeline(transaction=False)
         if new:
-            pipe.sadd(BLACKLIST_SEEN_KEY, *new)
+            pipe.sadd(seen_key, *new)
         if gone:
-            pipe.srem(BLACKLIST_SEEN_KEY, *gone)
+            pipe.srem(seen_key, *gone)
         pipe.execute()
         return set(new)
 
@@ -233,9 +244,10 @@ class Detector:
         return alerts
 
     def _analyze_l5(self, wallets, now, start=None):
-        """L5: 블랙리스트·동결 지갑(분석 지갑 자신은 제외)과 주고받은 거래."""
+        """L5: 블랙리스트·동결 지갑(분석 지갑 자신은 제외)과 주고받은 거래.
+        동결 지갑 = 직원이 확인한 동결만 (L5_EXPOSURE=all 이면 모든 동결)."""
         black = self.r.smembers(BLACKLIST_KEY)
-        frozen = self.r.smembers(FROZEN_KEY)
+        frozen = self.r.smembers(CONFIRMED_FROZEN_KEY if L5_EXPOSURE == "confirmed" else FROZEN_KEY)
         risky = sorted((black | frozen) - set(wallets))
         if not risky:
             return []

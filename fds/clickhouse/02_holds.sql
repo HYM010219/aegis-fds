@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS aegis.holds_kafka
     timestamp  String
 )
 ENGINE = Kafka
-SETTINGS kafka_broker_list = 'kafka:9092',
+SETTINGS kafka_broker_list = 'kafka:29092',
          kafka_topic_list = 'fds.holds.v1',
          kafka_group_name = 'clickhouse-holds',
          kafka_format = 'JSONEachRow',

@@ -20,6 +20,10 @@ FROZEN_REASONS_KEY = "fds:frozen_reasons"  # 지갑별 동결 사유 (Hash: 지�
 BLACKLIST_KEY = "fds:blacklist_wallets"    # 미리 알려진 위험 주소 (Set)
 # 직원이 동결을 해제한 시각 (Hash: 지갑 → ms). Spark는 이 시각 이후 거래만 다시 분석한다 (해제 직후 재동결 방지).
 UNFROZEN_AT_KEY = "fds:unfrozen_at"
+# 직원이 확인한 동결 (Set). 직원 동결·수동 동결 때 넣고, 해제 때 뺀다.
+# L5 "동결 지갑 노출"은 이 목록만 근거로 쓴다: 사람이 확인하지 않은 자동 판정(L1·L2·L3·L8 자동 동결)을
+# 다른 판정의 근거로 쓰면 오탐 하나가 상대 지갑들로 번진다 (11/19 메인넷 실측: 30분에 L5 106건).
+CONFIRMED_FROZEN_KEY = "fds:frozen_confirmed"
 
 # 화이트리스트를 둘 수 있는 룰.
 # R01~R06: 게이트웨이 1단계 보류 면제 / L: Spark 2단계(L1~L8) 분석 면제
@@ -35,4 +39,10 @@ def whitelist_key(rule_id):
 
 # ---------- 룰 기준 중 여러 곳이 같이 쓰는 값 ----------
 # R05 대량 송금 기준 (USDT). L2(쪼개서 대량 송금)는 R05를 피하는 패턴이라 같은 값을 기준으로 쓴다.
+import os
+
+# R05 대량 송금 전용 기준 (USDT). 환경 변수로 게이트웨이 R05만 독립 변경 가능 (기본 5만, 실험 시 10만)
+R05_LIMIT_USDT = int(os.getenv("R05_LIMIT_USDT", "50000"))
+
+# L2(쪼개서 대량 송금) 등 공통 기준 (USDT). R05를 10만으로 올려도 L2는 5만 유지
 WHALE_LIMIT_USDT = 50_000

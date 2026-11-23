@@ -1,14 +1,36 @@
 # 접속 정보 (절대 올리지 않음, 형식은 .env.example 참고)
 .env
+.env.local
+.env.*.local
+deploy/**/.env
+*.pem
+htpasswd
+soak_*
+!.env.example
+!deploy/**/.env.example
+!web/.env.example
 
-# 가상환경, 실행 중 생기는 파일
+# 가상환경 / 실행 중 생기는 파일
 .venv/
 venv/
 __pycache__/
 *.pyc
 logs/
+data/onchain/
 
-# 에디터, OS
+# 에디터 / OS
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local test scripts and artifacts
+.retest_*
+*.mp4
+*.pdf
+aegis.bundle
+analyze_*.py
+measure_*.ps1
+patch_*.diff
+run_*.py
+test_*.py
+

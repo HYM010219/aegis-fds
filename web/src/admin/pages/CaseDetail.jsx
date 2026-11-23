@@ -178,6 +178,7 @@ export default function CaseDetail({ id, me }) {
           <div>
             <div className="ch-addr">
               <Addr a={c.violator_address} full copyable />
+              {c.label && <span className="otag" title={c.label}>{c.label}</span>}
               <a href={`https://etherscan.io/address/${c.violator_address}`} target="_blank" rel="noreferrer" className="ext">Etherscan ↗</a>
             </div>
             <div className="tags">
@@ -272,7 +273,7 @@ export default function CaseDetail({ id, me }) {
                   const max = c.counterparties[0].in + c.counterparties[0].out;
                   return (
                     <div className="cp" key={p.address}>
-                      <div className="cp-top"><span className="who"><Avatar origin={p.origin} size={22} /><Addr a={p.address} /><OriginTag origin={p.origin} /></span><Money v={p.in + p.out} unit={false} /></div>
+                      <div className="cp-top"><span className="who"><Avatar origin={p.origin} size={22} /><Addr a={p.address} />{p.label && <span className="otag" title={p.label}>{p.label}</span>}<OriginTag origin={p.origin} /></span><Money v={p.in + p.out} unit={false} /></div>
                       <div className="cp-bar"><span className="in" style={{ width: `${(p.in / max) * 100}%` }} /><span className="out" style={{ width: `${(p.out / max) * 100}%` }} /></div>
                     </div>
                   );

@@ -8,7 +8,7 @@ start: 직원이 동결 해제한 지갑은 해제 시각(start) 이후 기록�
 """
 from bson.decimal128 import Decimal128
 
-from config import BIG_AMOUNT, L1_MIN_HOLDS, L7_MIN_NEW, MAX_HASHES, PERIOD, SPLIT_MAX, SPLIT_MIN
+from config import BIG_AMOUNT, L1_HOLD_SIDE, L1_MIN_HOLDS, L7_MIN_NEW, MAX_HASHES, PERIOD, SPLIT_MAX, SPLIT_MIN
 
 
 def num(value):
@@ -47,8 +47,11 @@ def counterparties(db, wallets, now):
 
 def hold_summary(db, wallets, now, start=None):
     """지갑별 2주 보류 횟수 (L1 기준 이상인 지갑만)."""
+    match_q = {"wallet": {"$in": wallets}, "held_at": {"$gte": _since(now, PERIOD["long"], start)}}
+    if L1_HOLD_SIDE == "sender":
+        match_q["side"] = "SENDER"
     return list(db.fds_holds.aggregate([
-        {"$match": {"wallet": {"$in": wallets}, "held_at": {"$gte": _since(now, PERIOD["long"], start)}}},
+        {"$match": match_q},
         {"$group": {
             "_id": "$wallet",
             "holds": {"$sum": 1},

@@ -172,7 +172,8 @@ def _pass_throughs(received, sent):
 
 def l5(inflow, outflow, black, now):
     """통과된 거래만 센다 (R07로 막힌 시도는 제외). 등급은 _l5_grade().
-    inflow, outflow: queries.risky_flows() 결과 / black: 블랙리스트 (나머지 위험 지갑은 동결 지갑)."""
+    inflow, outflow: queries.risky_flows() 결과 / black: 블랙리스트 (나머지 위험 지갑은 동결 지갑).
+    동결 지갑은 기본적으로 직원이 확인한 동결만 들어온다 (detector._analyze_l5, config.L5_EXPOSURE)."""
     per_wallet = defaultdict(lambda: {"in_black": [], "out_black": [], "frozen_sum": 0.0,
                                       "hashes": [], "first": None, "last": None})
     for direction, rows in (("in", inflow), ("out", outflow)):

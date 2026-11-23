@@ -1,0 +1,41 @@
+{
+  "_doc": "알려진 주소 목록 (거래소·프로토콜 계약). 사람이 출처에서 확인한 것만 넣는다. address는 소문자.",
+  "entities": [
+    {
+      "address": "0x559432e18b281731c054cd703d4b49872be4ed53",
+      "name": "OKX Hot Wallet 5",
+      "category": "EXCHANGE",
+      "source": "Etherscan 라벨",
+      "source_url": "https://etherscan.io/address/0x559432e18b281731c054cd703d4b49872be4ed53",
+      "verified_at": "2026-11-19",
+      "note": "1차 측정 미통과 상위 1위(49건). 화이트리스트 R01·R04·R05·L"
+    },
+    {
+      "address": "0x000000000004444c5dc75cb358380d2e3de08a90",
+      "name": "Uniswap V4 Pool Manager",
+      "category": "DEX",
+      "source": "Etherscan 라벨",
+      "source_url": "https://etherscan.io/address/0x000000000004444c5dc75cb358380d2e3de08a90",
+      "verified_at": "2026-11-19",
+      "note": "1차 측정 미통과 32건. 화이트리스트 R01·R04·R05·L"
+    },
+    {
+      "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+      "name": "Morpho Blue",
+      "category": "LENDING",
+      "source": "Etherscan 라벨",
+      "source_url": "https://etherscan.io/address/0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+      "verified_at": "2026-11-19",
+      "note": "L8 자동 동결 → 예치 지갑 L5 전이. 화이트리스트 R01·R04·R05·L"
+    },
+    {
+      "address": "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae",
+      "name": "LI.FI Diamond",
+      "category": "BRIDGE",
+      "source": "Etherscan 라벨",
+      "source_url": "https://etherscan.io/address/0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae",
+      "verified_at": "2026-11-19",
+      "note": "2차 측정 중 자동 동결. 화이트리스트 미등록"
+    }
+  ]
+}

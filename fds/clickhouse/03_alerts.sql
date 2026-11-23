@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS aegis.alerts_kafka
     period_profile       Nullable(String)
 )
 ENGINE = Kafka
-SETTINGS kafka_broker_list = 'kafka:9092',
+SETTINGS kafka_broker_list = 'kafka:29092',
          kafka_topic_list = 'fds.alerts.v1',
          kafka_group_name = 'clickhouse-alerts',
          kafka_format = 'JSONEachRow',

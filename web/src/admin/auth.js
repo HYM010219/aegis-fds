@@ -7,10 +7,12 @@
 const ACCOUNTS = {
   analyst: { pw: "aegis1234", name: "김분석", role: "ANALYST" },
   viewer: { pw: "view1234", name: "박조회", role: "VIEWER" },
+  team: { pw: "demo1234", name: "팀원(조회전용)", role: "VIEWER" },
 };
 export const DEMO_ACCOUNTS = [
-  { id: "analyst", pw: "aegis1234", desc: "분석관 — 동결·오탐 처리 가능" },
+  { id: "team", pw: "demo1234", desc: "팀원용 조회 전용 계정" },
   { id: "viewer", pw: "view1234", desc: "조회 전용" },
+  { id: "analyst", pw: "aegis1234", desc: "분석관 — 동결·오탐 처리 가능" },
 ];
 export const ROLE_LABEL = { ANALYST: "분석관", VIEWER: "조회 전용" };
 const KEY = "aegis:admin_session";

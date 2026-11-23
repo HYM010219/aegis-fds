@@ -13,7 +13,7 @@ export const isLive = () => !!BASE;
 async function http(path, opts = {}) {
   const r = await fetch(`${BASE}/api/v1/admin${path}`, {
     ...opts,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionStorage.getItem("aegis:admin_token") || ""}`, ...(opts.headers || {}) },
+    headers: { "Content-Type": "application/json", "X-Session-Token": `Bearer ${sessionStorage.getItem("aegis:admin_token") || ""}`, ...(opts.headers || {}) },
   });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();

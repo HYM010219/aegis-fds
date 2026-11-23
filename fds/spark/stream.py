@@ -76,6 +76,11 @@ def process_batch(df, batch_id):
         )
 
     stats["seconds"] = round(time.time() - started, 2)
+    # 배치 성공 하트비트를 Redis에 기록 (관제 화면 연동)
+    try:
+        detector.r.set("fds:heartbeat:spark", int(time.time() * 1000))
+    except Exception as e:
+        logger.warning(f"spark heartbeat error: {e}")
     # 할 일이 없던 배치(시계 신호만 있는 경우)는 로그를 남기지 않는다. 배치 시간이 10초보다 충분히 짧은지 여기서 본다.
     if stats["analyzed"] or stats["l5_recheck"] or stats["alerts"] or stats["cooling"] or stats["recheck_queued"]:
         logger.info(f"batch={batch_id} {json.dumps(stats)}")

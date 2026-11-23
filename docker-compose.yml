@@ -42,9 +42,17 @@ services:
       - GATEWAY_API_KEY=${GATEWAY_API_KEY}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}  # 직원 API 키 (관제 웹 백엔드용). 비어 있으면 직원 API만 꺼짐
       - TRANSFERS_TTL_DAYS=0       # transfers 자동 삭제(일). 0 = 끔. ClickHouse 연결 후 14로 켬
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=aegis
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=aegis
+      - PERIOD_PROFILE=demo
+      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-50000}
     ports:
       - "8000:8000"                # LAN에 열림 → 봇 PC가 접속
     volumes:
+      - ./fds/app:/app/app:ro
+      - ./fds/common:/app/common:ro
       - ./fds/logs:/app/logs       # 로그가 내 PC의 C:\aegis-fds\fds\logs 에 쌓임
     depends_on:
       redis:
@@ -102,6 +110,10 @@ services:
       - MONGO_DB=aegis
       - KAFKA_BOOTSTRAP=kafka:9092
       - REDIS_HOST=redis
+      - L1_ACTION=${L1_ACTION:-freeze}
+    volumes:
+      - ./fds/app:/app/app:ro
+      - ./fds/common:/app/common:ro
     depends_on:
       kafka:
         condition: service_healthy
@@ -128,6 +140,7 @@ services:
       - PERIOD_PROFILE=demo        # demo: 20분/5분/1분, prod: 2주/24시간/1시간
       - CHECKPOINT_DIR=/checkpoints/detector
       - STARTING_OFFSETS=latest    # 첫 시작 때 과거 메시지로 동결하지 않도록 새 메시지부터 읽음
+      - L1_HOLD_SIDE=${L1_HOLD_SIDE:-all}
     volumes:
       - ./fds/spark:/app/spark:ro          # 코드는 이미지에 넣지 않고 연결 (재시작만으로 반영)
       - ./fds/common:/app/common:ro        # 공용 이름·값 (게이트웨이와 같은 파일)

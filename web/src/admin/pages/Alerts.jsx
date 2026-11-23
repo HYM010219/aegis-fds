@@ -31,7 +31,7 @@ function Preview({ c, now }) {
         <Avatar origin={c.origin} size={38} />
         <div>
           <Addr a={c.violator_address} copyable h={10} t={6} />
-          <div className="tags"><OriginTag origin={c.origin} isNew={c.isNew} /></div>
+          <div className="tags">{c.label && <span className="otag" title={c.label}>{c.label}</span>}<OriginTag origin={c.origin} isNew={c.isNew} /></div>
         </div>
       </div>
       <div className="tags"><Grade g={c.risk_level} /><Status s={c.status} /></div>
@@ -88,7 +88,7 @@ export default function Alerts({ query = {} }) {
     { id: "rule", accessorKey: "rule_id", header: "룰", cell: (i) => <Rule id={i.getValue()} /> },
     {
       id: "wallet", accessorKey: "violator_address", header: "대상 지갑", enableSorting: false,
-      cell: (i) => { const c = i.row.original; return <div className="who"><Avatar origin={c.origin} /><Addr a={c.violator_address} /><OriginTag origin={c.origin} isNew={c.isNew} /></div>; },
+      cell: (i) => { const c = i.row.original; return <div className="who"><Avatar origin={c.origin} /><Addr a={c.violator_address} />{c.label && <span className="otag" title={c.label}>{c.label}</span>}<OriginTag origin={c.origin} isNew={c.isNew} /></div>; },
     },
     { id: "cp", accessorKey: "counterpart", header: "상대 · 내용", enableSorting: false, cell: (i) => <span className="c-muted wrap">{i.getValue()}</span> },
     { id: "amount", accessorKey: "amount", header: "관련 금액", cell: (i) => <Money v={i.getValue()} unit={false} />, meta: { right: true } },

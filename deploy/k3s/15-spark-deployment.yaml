@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-checkpoint-pvc
+  namespace: aegis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark
+  namespace: aegis
+  labels:
+    app: spark
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: spark
+  template:
+    metadata:
+      labels:
+        app: spark
+    spec:
+      containers:
+        - name: spark
+          image: aegis-spark:latest
+          imagePullPolicy: Never
+          command:
+            - /opt/spark/bin/spark-submit
+            - --master
+            - local[2]
+            - --driver-memory
+            - 2g
+            - --packages
+            - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7
+            - --conf
+            - spark.jars.ivy=/opt/spark/ivy
+            - /app/spark/stream.py
+          envFrom:
+            - configMapRef:
+                name: aegis-config
+            - secretRef:
+                name: aegis-env
+          env:
+            - name: CHECKPOINT_DIR
+              value: /checkpoints/detector
+            - name: STARTING_OFFSETS
+              value: latest
+          volumeMounts:
+            - name: spark-ivy
+              mountPath: /opt/spark/ivy
+            - name: spark-checkpoints
+              mountPath: /checkpoints
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2048Mi
+            limits:
+              cpu: 2000m
+              memory: 4096Mi
+      volumes:
+        - name: spark-ivy
+          emptyDir: {}
+        - name: spark-checkpoints
+          persistentVolumeClaim:
+            claimName: spark-checkpoint-pvc

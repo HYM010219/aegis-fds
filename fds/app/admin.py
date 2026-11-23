@@ -49,6 +49,7 @@ from app.store import outbox_doc
 from app.wallet_status import frozen_reason
 from common.keys import (
     BLACKLIST_KEY,
+    CONFIRMED_FROZEN_KEY,
     FREEZE_TOPIC,
     FROZEN_KEY,
     FROZEN_REASONS_KEY,
@@ -197,7 +198,11 @@ async def freeze_case(case_id: str, body: Review):
     already, current_rule = await _redis(pipe)
 
     # 1) 다른 룰로 이미 동결된 지갑: 직원 판단만 기록 (사유와 이벤트는 처음 동결 그대로)
+    #    직원이 동결을 확인한 것이므로 '확인된 동결'에는 넣는다 (L5 노출 근거)
     if already:
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)
+        await _redis(pipe)
         if status != FROZEN:
             try:
                 await db.fds_cases.update_one({"_id": case["_id"]}, {"$set": review})
@@ -222,6 +227,7 @@ async def freeze_case(case_id: str, body: Review):
     pipe = redis_client.pipeline(transaction=True)
     pipe.hset(FROZEN_REASONS_KEY, wallet, rule)
     pipe.sadd(FROZEN_KEY, wallet)
+    pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)   # 직원 동결 = 확인된 동결
     await _redis(pipe)
 
     _audit("FREEZE", case_id=case_id, wallet=wallet, rule=rule, operator=body.operator, result="FROZEN")
@@ -293,6 +299,7 @@ async def unfreeze_wallet(wallet: str, body: Review):
     pipe = redis_client.pipeline(transaction=True)
     pipe.hset(UNFROZEN_AT_KEY, wallet, int(now.timestamp() * 1000))
     pipe.srem(FROZEN_KEY, wallet)
+    pipe.srem(CONFIRMED_FROZEN_KEY, wallet)
     pipe.hdel(FROZEN_REASONS_KEY, wallet)
     await _redis(pipe)
 
@@ -314,6 +321,10 @@ async def freeze_wallet(wallet: str, body: Review):
     pipe.hget(FROZEN_REASONS_KEY, wallet)
     already, current_rule = await _redis(pipe)
     if already:
+        # 자동 동결된 지갑을 직원이 다시 동결 = 확인 (L5 노출 근거에 포함)
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)
+        await _redis(pipe)
         return {"status": "OK", "result": "ALREADY_FROZEN", "wallet": wallet, "reason": frozen_reason(current_rule)}
     now = _now()
 
@@ -353,6 +364,7 @@ async def freeze_wallet(wallet: str, body: Review):
     pipe = redis_client.pipeline(transaction=True)
     pipe.hset(FROZEN_REASONS_KEY, wallet, MANUAL_RULE)
     pipe.sadd(FROZEN_KEY, wallet)
+    pipe.sadd(CONFIRMED_FROZEN_KEY, wallet)
     await _redis(pipe)
 
     _audit("FREEZE_WALLET", wallet=wallet, operator=body.operator, case_id=str(case["_id"]))

@@ -67,3 +67,18 @@ ANALYZED_PREFIX = "fds:analyzed:"            # 최근에 분석한 지갑 (재�
 PENDING_KEY = "fds:analyze_pending"          # 간격 때문에 미룬 지갑 (점수 = 분석할 시각 ms)
 RECHECK_KEY = "fds:recheck_l5"               # 계기 ③: L5를 다시 볼 상대 지갑 (점수 = 넣은 시각 ms)
 BLACKLIST_SEEN_KEY = "fds:blacklist_seen"    # 이미 계기 ③을 처리한 블랙리스트
+CONFIRMED_SEEN_KEY = "fds:frozen_confirmed_seen"  # 이미 계기 ③을 처리한 '확인된 동결'
+
+# L5 동결 지갑 노출의 근거
+#   confirmed (기본): 블랙리스트 + 직원이 확인한 동결만. 자동 동결은 근거로 쓰지 않는다 (연쇄 오탐 차단)
+#   all            : 블랙리스트 + 모든 동결 (이전 동작, 비교 측정용)
+# L1 보류 카운트 대상 (E안 스위치)
+#   all    (기본): 보내는 쪽 + 받는 쪽 모든 보류 합산 (기준안 A/B 동작)
+#   sender       : 보내는 쪽(side == SENDER) 보류만 합산 (E안: R03 수취인 등 제외)
+L1_HOLD_SIDE = os.getenv("L1_HOLD_SIDE", "all").lower()
+if L1_HOLD_SIDE not in ("all", "sender"):
+    raise ValueError(f"L1_HOLD_SIDE는 'all' 또는 'sender'여야 합니다: {L1_HOLD_SIDE}")
+
+L5_EXPOSURE = os.getenv("L5_EXPOSURE", "confirmed")
+if L5_EXPOSURE not in ("confirmed", "all"):
+    raise ValueError(f"L5_EXPOSURE는 confirmed 또는 all: {L5_EXPOSURE}")

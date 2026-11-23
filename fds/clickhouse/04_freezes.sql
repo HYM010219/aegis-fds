@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS aegis.freezes_kafka
     unfrozen_at Nullable(String)
 )
 ENGINE = Kafka
-SETTINGS kafka_broker_list = 'kafka:9092',
+SETTINGS kafka_broker_list = 'kafka:29092',
          kafka_topic_list = 'fds.freezes.v1',
          kafka_group_name = 'clickhouse-freezes',
          kafka_format = 'JSONEachRow',

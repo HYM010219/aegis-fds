@@ -38,7 +38,7 @@ function checkTo(v, wallet) {
   if (!isAddress(v)) return { level: "err", text: `주소 형식이 맞지 않습니다 (0x로 시작하는 42자리, 지금 ${v.length}자리)` };
   const lv = v.toLowerCase();
   if (lv === wallet.address.toLowerCase()) return { level: "err", text: "내 지갑으로는 보낼 수 없습니다" };
-  const sent = [...new Set(wallet.history.filter((h) => h.state === "OK").map((h) => h.to.toLowerCase()))];
+  const sent = [...new Set((wallet.history || []).filter((h) => h.state === "OK").map((h) => h.to.toLowerCase()))];
   if (sent.includes(lv)) return { level: "ok", text: "✓ 전에 보낸 적 있는 주소입니다" };
   const look = sent.find((a) => a.slice(0, 6) === lv.slice(0, 6) && a.slice(-4) === lv.slice(-4));
   if (look) return { level: "danger", text: `⚠ 전에 보낸 ${short(look, 6, 4)} 와 앞뒤 글자가 같지만 다른 주소입니다. 가짜 주소(주소 오염) 사기일 수 있으니 전체 주소를 꼭 확인하세요.` };
@@ -92,7 +92,7 @@ export default function UserApp() {
     }
   }
 
-  const lastTo = wallet.history.find((h) => h.state === "OK")?.to;
+  const lastTo = (wallet.history || []).find((h) => h.state === "OK")?.to;
   const minutesLeft = st.state === "HOLD" ? Math.max(1, Math.ceil((st.until - now) / 60000)) : 0;
 
   return (

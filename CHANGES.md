@@ -6,7 +6,7 @@
 ---
 
 ## 1. Step 0: 스냅샷 커밋 & 브랜치 통합 (11/18)
-- **기준 커밋**: `infra` 브랜치 스냅샷 (`c2d8a77`)
+- **기준 커밋**: 로컬 통합 테스트 시작 전 `infra` 브랜치 기준 스냅샷
 - **브랜치 생성**: `local-lab` (로컬 전용 통합 브랜치)
 - **DE 브랜치 병합**: `origin/DE` (commit `46512b0`) 머지
   - **충돌 해결 1 (`fds/app/store.py`)**:
@@ -174,7 +174,11 @@ if not ALCHEMY_WSS:
     }
 ```
 - [FE/INFRA] Vite 프록시가 루트 .env 키를 서버 쪽에서 주입 (vite.config.js, web/.env.local), 키 하드코딩 없음, 백엔드 모드에서는 127.0.0.1 바인딩
-- [BE] 거래 조회 API GET /api/v1/admin/transfers 추가 (admin_views.py, 읽기 전용, maxTimeMS 2초)
+- [BE] 통합 검색 API GET /api/v1/admin/search?q= 추가 (admin_views.py, 사건·지갑·거래 접두어 정규식 검색, 최대 8건)
+- [BE] 자금 흐름 그래프 API GET /api/v1/admin/cases/{id}/graph 추가 (admin_views.py, 발신·수신 1차 연결망 노드·엣지 생성)
+- [BE] 감사 로그 API GET /api/v1/admin/audit 추가 (admin_views.py, 관리자 조치 이력 fds_cases 조회)
+- [BE] 대시보드 통계 API GET /api/v1/admin/stats 추가 (admin_views.py, 24시간 거래·동결·보류 KPI 집계)
+- [BE/INFRA] K3s 파드 상태 프로브 GET /healthz (liveness), GET /ready (readiness, Redis/Mongo ping) 추가 (main.py)
 - [BE] 거래 조회 API GET /api/v1/admin/transfers 추가, FE 실시간 거래 화면에 실데이터 연동 확인 (11/19)
 - [BE/INFRA] GET /api/v1/admin/health: 시스템 상태 + 데이터 신뢰성 신호(원장 신선도, outbox 발행 대기, Mongo↔ClickHouse 적재 완결성 SQL 대조, Spark 하트비트 자리). gateway에 ClickHouse 접속 환경 변수 4종 추가
 - [BE] GET /api/v1/admin/cases, /cases/{id} 추가: Spark 원본 근거(dict)를 FE 근거 막대 목록으로 변환, 상태 매핑, 응답 모델로 Swagger 계약화. 기준값은 spark/config.py와 중복(To-Be: common/ 통합)
@@ -188,18 +192,18 @@ if not ALCHEMY_WSS:
 - **전체 파이프라인 경로**:
   `Ethereum Mainnet (Alchemy WSS)` ➔ `collector_alchemy.py` ➔ `FastAPI Gateway (R01~R07 입구 검사)` ➔ `MongoDB Outbox` ➔ `Publisher` ➔ `Kafka 토픽 5종` ➔ `PySpark Streaming (L1~L8 심층 탐지)` ➔ `MongoDB fds_cases` ➔ `ClickHouse 분석 원장` ➔ `FastAPI Admin Views` ➔ `React 관제 콘솔`
 - **처리량 및 지연(Latency) 실측 지표**:
-  - 인입 처리량: **실측 약 6.4 TPS** (녹화 실측 약 6 TPS와 근접)
+  - 인입 처리량: **실측 약 6.4 TPS** (단일 실시간 수집 구간 기준. 30시간 전체 녹화 평균은 7.7건/초)
   - Kafka 토픽 발행 속도:
     - `transfer.events.v1`: **초당 4.3건 (Lag 0)**
     - `transfer.rejected.v1`: **초당 2.1건 (Lag 1)**
     - `fds.holds.v1`: **초당 0.4건 (Lag 0)**
-  - 카프카 파티션 Lag: **0 ~ 1건** 유지 (스트리밍 지연 0ms 수렴)
-  - 데이터 신뢰성 신호: 원장 신선도 정상, ClickHouse ↔ MongoDB 실시간 적재 완결성(100%) 일치
+  - 카프카 파티션 Lag: **0 ~ 1건** 유지 (메시지 밀림 없음 확인, 종단 지연은 추후 정밀 측정)
+  - 데이터 신뢰성 신호: 원장 신선도 정상, ClickHouse ↔ MongoDB 실시간 적재 일치 확인 (1시간 누적 후 대조 기준)
 
 ### 2) 핵심 발견: 실데이터 거절률 35% 원인 규명 및 "연쇄 동결(Cascading Freeze)" 현상 실측
 - **최근 1,000건 판정 결과 통계 분석**:
   - 통과(PASS): 605건 (60.5%)
-  - **L1 자동 동결 (FROZEN, L1)**: 258건 (25.8%) ➔ 거절 건수의 70% 이상 점유
+  - **L1 자동 동결 (FROZEN, L1)**: 258건 (25.8%) ➔ 거절 건수(395건)의 약 65% 점유
   - 고액 송금 보류 (HOLD, R05): 29건 (24h 전체 집계 시 216건으로 최다 원천)
   - 분산 송금 보류 (HOLD, R04): 40건
   - 속도 제한 보류 (HOLD, R01): 21건
@@ -250,8 +254,8 @@ if not ALCHEMY_WSS:
   * L5 검토 대기(PENDING): 0건 (L5 소멸 확인, 양성 경로는 미검증)
   * 자동 동결: 85건 (L1 69, L2 10, L8 6) / 미통과율: 34.7% (3차 표본은 R03 1위(47건) — B안 대상 재집계 필요)
   * 직원 동결(fds:frozen_confirmed): 0건 (측정 중 직원 동결 조작 없음 확인)
-- [BE] 엔터티 목록 common/entities.json(주소·이름·종류·출처·확인일, 사람 확인 4곳) + common/entities.py(Spark 3.8 호환 로더). 관제 API v7이 거래 fromLabel/toLabel, 사건 label, 거래 상대 label을 채움. 다음 단계: L8 계약 제외·L5 노출 계산에 재사용
-- [INFRA] AWS 배포 아키텍처 전략 확정: 데이터 노드는 PoC 단계에서 퍼블릭 서브넷 + 보안 그룹 엄격 차단(가안) 채택 (NAT 비용 0원 유지 및 Docker/SSM 정상화), 정의서 9.6에 To-Be(프라이빗+NAT)로 정직하게 기록
+- [BE] 엔터티 목록 fds/common/entities.json(주소·이름·종류·출처·확인일, 사람 확인 4곳) + fds/common/entities.py(Spark 3.8 호환 로더). 관제 API v7이 거래 fromLabel/toLabel, 사건 label, 거래 상대 label을 채움. 다음 단계: L8 계약 제외·L5 노출 계산에 재사용
+- [INFRA] AWS 배포 아키텍처: v2.4 §9.6 설계는 데이터 노드를 프라이빗 서브넷에 두고 NAT 게이트웨이 없이 S3 VPC 엔드포인트를 사용함. (v1 임시 단일 노드 운영 경험을 바탕으로 K3s 2노드 분리 배포 완료)
 - [FE 제안] 이름 배지 3개 화면(Alerts.jsx, CaseDetail.jsx, Transfers.jsx) — 아키텍트 로컬 적용, 다음 주 FE 리뷰 후 확정
 - [DE 제안] L1_ACTION=freeze|review (기본 freeze). 리플레이 B 비교용: C안(L1 자동 동결 ➔ 검토 대기 전환) 단일 변수 실험 스위치
 - [DE 제안] L1_HOLD_SIDE=all|sender (기본 all). 리플레이 E 비교용: E안(L1 집계 시 side == SENDER만 카운트, 수취인 보류 제외) 단일 변수 실험 스위치
@@ -296,24 +300,24 @@ if not ALCHEMY_WSS:
    - 동결에서 제외된 33곳의 A회차 보류 구성: 18곳은 수취 측(R03) 보류만 100% 누적된 지갑이었으며, 9곳은 발송 보류 1회, 5곳은 2회, 1곳은 3회 포함.
    - 403 거절은 441건 감소했으나 429 보류가 350건 증가하여, 순 통과 건수 증가는 +91건(+0.8%p)임. 동결되지 않은 지갑이 송금을 지속하며 일시 보류(R03 153→214회)를 겪음. 영구 차단(동결)이 일시 지연(보류)으로 전환된 구조임.
 3. **한계 및 향후 검증**:
-   - 조건별 1회 실행이라 자연 변동 폭 미측정 (토요일 AWS에서 A2 및 EK 복합안 재측정 예정).
+   - 조건별 1회 실행이라 자연 변동 폭 미측정 (A2 및 EK 복합안 재측정: 미실시).
    - K회차 쿨다운은 약 13분으로 규칙(20분) 대비 다소 짧았음.
-   - E안과 K안에서 제외/완화된 지갑의 위험 여부(재현율)는 메인넷 정답 라벨이 없으므로 토요일 bot3 시험에서 확인 예정.
+   - E안과 K안에서 제외/완화된 지갑의 위험 여부(재현율)는 메인넷 정답 라벨이 없으므로 검증 미실시 (향후 과제).
 
 ---
 
 ## 9. [이슈 조사] Kafka CPU 간헐적 스파이크 현상 (AWS 실측 확인, 침지 종료 후 튜닝 예정)
-- **현상**: 침지 중 `aegis-kafka`의 CPU 사용률이 간헐적으로 200% 이상 스파이크하는 현상 관측 (최댓값 232.49%).
+- **현상**: 침지 중 `aegis-kafka`의 CPU 사용률이 간헐적으로 200% 이상 스파이크하는 현상 관측 (최종 최댓값 243.08%, p95 227.14%, 평균 51.48%).
 - **AWS 침지 데이터 실측 검증 (2026-11-22 실측)**:
   * AWS EC2 침지 서버(Ubuntu, m5.2xlarge)의 `soak_stats.csv` 확인 결과:
-    - `aegis-kafka` 피크: **232.49%** (코어 2.32개 상당, 상위 5건 모두 200% 초과)
+    - `aegis-kafka` 피크: **243.08%** (코어 2.43개 상당), p95 **227.14%**, 평균 **51.48%**
     - `aegis-clickhouse` 피크: **74.25%** (코어 0.74개 상당)
   * **가설 검증 결과**: 로컬 가상화 환경(WSL2)의 수치 왜곡 가설은 AWS 리눅스 실측 데이터로 명백히 반증되어 완전 철회함. 실제 워크로드상 발생하는 부하임이 확인됨.
 - **아키텍처 및 리소스 영향**:
-  * 현재 m5.2xlarge(8 vCPU)에서는 전체 CPU 대비 약 29% 수준으로 침지가 안정 유지되고 있으나,
-  * 화요일 분리 예정인 데이터 노드(m5.xlarge, 4 vCPU) 환경에서는 Kafka(2.3) + ClickHouse(0.7) 동시 점유 시 Mongo 및 Redis(`docker-compose.aws.yml` 기준 `--appendonly yes` 설정 확인)와의 경합 가능성(분포 확인 후 판단).
+  * 현재 m5.2xlarge(8 vCPU)에서는 순간 피크 기준 전체 8코어 대비 약 29% 수준이나,
+  * 화요일 분리 예정인 데이터 노드(m5.xlarge vs m5.2xlarge 상향 결정 대기) 환경에서는 Kafka(2.4) + ClickHouse(0.7) 동시 점유 시 Mongo 및 Redis(`docker-compose.aws.yml` 기준 `--appendonly yes` 설정 확인)와의 경합 가능성(분포 확인 후 판단).
 - **향후 계획 (원칙: 침지 중 AWS 설정 변경 일체 금지)**:
-  1. [측정 계획] 진행 중인 AWS 침지 기간(11/24 화요일 종료 예정) 동안은 측정 전용(분포 분석, 피크 시점 타 컨테이너 상관관계 분석)으로만 운영.
+  1. [침지 성과] AWS Compose 침지 테스트는 11/23 00:31에 25시간 26분 가동 후 정상 중지 완료 (연결 끊김 0건 달성).
   2. [정밀 진단 계획] 로컬 환경에서 단일 변수(`kafka_poll_timeout_ms`, `fetch_wait_max_ms`는 기본 500ms 대비 1000ms 이상 설정 시에만 유의미) 격리 시험을 통해 ClickHouse 외 Spark/컨슈머 복합 영향 여부 검증.
   3. [해결 방안 계획] 침지 완료 및 실측 후 데이터 노드 vCPU 증설(m5.2xlarge 유지) 또는 ClickHouse Kafka 엔진 파라미터 튜닝 PR 적용.
 
@@ -321,13 +325,13 @@ if not ALCHEMY_WSS:
 
 ## 10. [배포 트러블슈팅] 배포 환경 관제 콘솔 인증 헤더 충돌 현상 (원인 규명 완료, 다음 주 SIT/PR 반영)
 - **현상 및 발견 경위**:
-  * AWS 프로덕션 Nginx 리버스 프록시 환경에서 관제 콘솔(`/admin/`) 접속 후 로그인 시 Nginx Basic Auth 팝업이 무한 반복 발생.
+  * AWS EC2 침지 서버 Nginx 리버스 프록시 환경에서 관제 콘솔(`/admin/`) 접속 후 로그인 시 Nginx Basic Auth 팝업이 무한 반복 발생.
   * Nginx access log에서 사용자 칸 `-`, 응답 크기 `581` 바이트(Nginx 자체 401 차단 페이지) 실측 확인.
 - **원인 분석**:
   1. **헤더 충돌**: FE (`web/src/admin/data/api.js:16`)에서 API 호출 시 `Authorization: Bearer <token>` 헤더를 명시적으로 첨부하여 전송함. HTTP 표준상 단일 `Authorization` 헤더만 허용되므로 브라우저의 Basic Auth 자격증명(`Authorization: Basic <base64>`)이 덮어씌워져 Nginx `auth_basic` 검증에 실패함.
   2. **프록시 키 누락**: 게이트웨이 백엔드 관리자 API(`admin_views.py`)가 요구하는 `X-Admin-Key`를 Nginx 프록시 계층에서 전달하지 않는 구조적 미연결 확인.
 - **침지 테스트 운영 방침 (현행 유지)**:
-  * 48시간 무인 침지 테스트에는 웹 UI 조작이 불필요하며(지표 무결성 유지를 위해 인위적 조작 금지), 수집기는 Nginx를 거치지 않고 호스트 데몬(systemd)으로 게이트웨이에 직결되어 6초 신선도로 정상 가동 중.
+  * 25시간 무인 침지 테스트에는 웹 UI 조작이 불필요하며(지표 무결성 유지를 위해 인위적 조작 금지), 수집기는 Nginx를 거치지 않고 호스트 데몬(systemd)으로 게이트웨이에 직결되어 6초 신선도로 정상 가동 중.
   * Nginx 임의 완화 시 공용 IP 환경에서 관리자 API 무인증 노출 및 git 추적 파일(`nginx.conf`) 비밀키 유출 위험이 있으므로 **금일 핫픽스는 일체 보류**.
   * 상태 모니터링은 SSM 터미널 관리자 헬스 신호(`ledger_freshness_s`, `outbox_pending`) 및 `record_stats.sh` 로깅으로 완전 대체.
 - **다음 주 SIT 및 정식 PR 계획**:

@@ -45,6 +45,7 @@ function withHeader(target, name, value) {
     },
     configure(proxy) {
       proxy.on("proxyReq", (proxyReq) => proxyReq.setHeader(name, value));
+      proxy.on("proxyReqWs", (proxyReq) => proxyReq.setHeader(name, value)); // WebSocket 연결 요청에도 붙인다
     },
   };
 }
@@ -71,7 +72,10 @@ export default defineConfig(({ mode }) => {
     proxy["/api/v1/transfers"] = withHeader(BACKEND, "X-API-Key", gw);
   }
   proxy["/api"] = { target: BACKEND, changeOrigin: true };
-  proxy["/ws"] = { target: BACKEND, ws: true, changeOrigin: true };
+  // 실시간 경보 WebSocket(/ws/admin)도 직원 키가 있어야 연결된다 (없으면 게이트웨이가 거절)
+  proxy["/ws"] = live
+    ? { ...withHeader(BACKEND, "X-Admin-Key", root.ADMIN_API_KEY), ws: true }
+    : { target: BACKEND, ws: true, changeOrigin: true };
 
   return {
     plugins: [react(), adminRedirect, readonlyGuard(isReadonly)],

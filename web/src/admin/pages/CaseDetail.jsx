@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceLine, CartesianGrid } from "recharts";
 import { useCase, useDecide } from "../data/hooks.js";
-import { api } from "../data/api.js";
+import { api, isLive } from "../data/api.js";
 import { L_RULES, LONG_LABEL, ORIGINS } from "../data/meta.js";
 import { can, actorName } from "../auth.js";
 import { navigate } from "../router.js";
@@ -89,9 +89,34 @@ function ConfirmAction({ open, action, c, onClose, onDone, me }) {
   );
 }
 
-/** STR(의심거래보고) 초안 — KoFIU 제출 양식 항목은 팀 확인 후 맞출 예정 */
+/** STR(의심거래보고) 초안
+ *  - 실데이터: 백엔드 초안(GET /cases/{id}/str-draft) — 사건 상세와 같은 숫자 보장, 분석관 의견 저장(PATCH)
+ *  - Mock: 화면이 사건 데이터로 직접 만든 초안 */
 function StrDraft({ open, c, onClose, me }) {
-  const text = useMemo(() => {
+  const live = isLive();
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [opinion, setOpinion] = useState("");
+  const [saving, setSaving] = useState(false);
+  const caseId = c?.case_id;
+  useEffect(() => {
+    if (!open || !live || !caseId) return undefined;
+    let alive = true;
+    setLoading(true);
+    setErr(null);
+    api.strDraft(caseId)
+      .then((r) => {
+        if (!alive) return;
+        setReport(r);
+        setOpinion(r?.analyst_opinion?.final_opinion || r?.analyst_opinion?.generated_draft || "");
+      })
+      .catch((e) => alive && setErr(e.message))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [open, live, caseId]);
+
+  const localText = useMemo(() => {
     if (!c) return "";
     const r = L_RULES[c.rule_id];
     const lines = [
@@ -129,24 +154,53 @@ function StrDraft({ open, c, onClose, me }) {
     return lines.join("\n");
   }, [c, me]);
   if (!open) return null;
+
+  const fromServer = live && !!report;
+  const text = fromServer ? report.text : localText;
+  const saved = report?.analyst_opinion?.final_opinion || "";
+  const allowed = can(me, "act");
+
   const save = async () => {
     await api.decide(c.case_id, "STR_DRAFT", { actor: actorName(me), note: "STR 초안 생성 · 다운로드" }).catch(() => {});
     const blob = new Blob(["﻿" + text], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `STR_${c.case_id}.txt`;
+    a.download = `${fromServer ? report.report_id : `STR_${c.case_id}`}.txt`;
     a.click();
     URL.revokeObjectURL(a.href);
     toast.success("STR 초안을 내려받고 감사 기록에 남겼습니다");
   };
+  const saveOpinion = () => {
+    setSaving(true);
+    api.saveStrOpinion(c.case_id, actorName(me), opinion.trim())
+      .then((r) => { setReport(r); toast.success("분석관 의견을 저장하고 감사 기록에 남겼습니다"); })
+      .catch((e) => toast.error(`의견 저장 실패: ${e.message}`))
+      .finally(() => setSaving(false));
+  };
+  const src = report?.provenance;
+
   return (
     <Modal open wide title="STR 초안 (의심거래보고)" onClose={onClose}
       footer={<>
-        <span className="note">KoFIU 실제 제출 양식 항목은 팀 확인 후 맞출 예정입니다.</span>
-        <button className="btn" onClick={() => copy(text, "STR 초안을 복사했습니다")}>복사</button>
-        <button className="btn primary" disabled={!can(me, "act")} onClick={save}>내려받기 (.txt)</button>
+        <span className="note">
+          {fromServer
+            ? `계산 출처: ${src?.computed_by || "-"} · 설정 ${src?.period_profile || "-"} · 배치 ${src?.spark_batch_id ?? "-"} (사건 상세와 같은 값)`
+            : "KoFIU 실제 제출 양식 항목은 팀 확인 후 맞출 예정입니다."}
+        </span>
+        <button className="btn" disabled={!text} onClick={() => copy(text, "STR 초안을 복사했습니다")}>복사</button>
+        <button className="btn primary" disabled={!allowed || !text} onClick={save}>내려받기 (.txt)</button>
       </>}>
-      <pre className="str">{text}</pre>
+      {live && loading && <div className="boot">백엔드 초안 불러오는 중…</div>}
+      {live && err && <p className="note">백엔드 초안을 불러오지 못해 화면에서 만든 초안을 보여줍니다 ({err})</p>}
+      {!(live && loading) && <pre className="str">{text}</pre>}
+      {fromServer && (
+        <label className="fld">
+          <span>분석관 의견 (의심 사유) <em>(저장하면 초안 5번 항목과 감사 기록에 반영)</em></span>
+          <textarea rows={4} value={opinion} onChange={(e) => setOpinion(e.target.value)} disabled={!allowed} />
+          <button className="btn" disabled={!allowed || saving || !opinion.trim() || opinion.trim() === saved}
+            onClick={saveOpinion}>{saving ? "저장 중…" : "의견 저장"}</button>
+        </label>
+      )}
     </Modal>
   );
 }

@@ -31,5 +31,9 @@ export const api = {
   decide: (id, action, body) =>                                                                   // POST /cases/{id}/decision
     isLive() ? http(`/cases/${id}/decision`, { method: "POST", body: JSON.stringify({ action, ...body }) }) : mock(() => S.decide(id, action, body)),
   view: (id, actor) => (isLive() ? Promise.resolve() : mock(() => S.logView(id, actor))),
+  // STR 초안: 백엔드가 사건 증거 그대로 만든 초안. Mock에는 없어서 null (화면이 직접 만든 초안을 쓴다)
+  strDraft: (id) => (isLive() ? http(`/cases/${id}/str-draft`).then((r) => r.str_report) : Promise.resolve(null)),        // GET   /cases/{id}/str-draft
+  saveStrOpinion: (id, operator, finalOpinion) =>                                                                         // PATCH /cases/{id}/str-draft
+    http(`/cases/${id}/str-draft`, { method: "PATCH", body: JSON.stringify({ operator, final_opinion: finalOpinion }) }).then((r) => r.str_report),
   search: (q) => mock(() => S.search(q)),
 };

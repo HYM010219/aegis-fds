@@ -76,9 +76,9 @@ class Detector:
         unfrozen = self._unfrozen_at(full_targets + recheck_targets, now)
         alerts = []
         for group, start in self._by_start(full_targets, unfrozen):
-            alerts += self._analyze_full(group, now, start)
+            alerts += self._with_start(self._analyze_full(group, now, start), start)
         for group, start in self._by_start(recheck_targets, unfrozen):
-            alerts += self._analyze_l5(group, now, start)
+            alerts += self._with_start(self._analyze_l5(group, now, start), start)
 
         for a in alerts:
             a["batch_id"] = batch_id
@@ -231,6 +231,13 @@ class Detector:
         for w in wallets:
             if w in unfrozen:
                 yield [w], unfrozen[w]
+
+    @staticmethod
+    def _with_start(alerts, start):
+        """조회 시작 시각(동결 해제 시각, 없으면 None)을 경보에 남긴다. crosscheck.py가 같은 범위로 다시 계산한다."""
+        for a in alerts:
+            a["history_from"] = start.astimezone(timezone.utc).isoformat() if start else None
+        return alerts
 
     def _analyze_full(self, wallets, now, start=None):
         """L1~L8 전부. 조회는 L2·L3·L6이 1번, L4·L8이 1번을 같이 쓴다. start: 동결 해제 시각."""

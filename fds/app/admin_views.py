@@ -191,6 +191,7 @@ class CaseDetail(CaseItem):
     otherCases: list[CaseItem]
     audit: list[AuditRow]                             # policy_decisions 해시 체인
     sdn: list[str]
+    recompute: dict | None = None                     # Spark 재계산 근거 묶음 (L2·L6·L7, spark/crosscheck.py). 목록 API에는 넣지 않음
 
 
 class GraphNode(BaseModel):
@@ -689,6 +690,52 @@ def _evidence(rule, e, c):
     return [], f"{rule} 경보", None
 
 
+KST = timezone(timedelta(hours=9))
+
+
+def _kst_time(iso, with_date):
+    try:
+        t = datetime.fromisoformat(iso).astimezone(KST)
+    except (TypeError, ValueError):
+        return "?"
+    return t.strftime("%m-%d %H:%M" if with_date else "%H:%M:%S")
+
+
+def _recompute_note(c):
+    """사건 한 줄 요약 끝에 붙이는 Spark 재계산 결과 (화면 수정 없이 글로 보여준다).
+    예) · Spark 재계산 일치 (10:05:00~10:10:00 KST, 구성 거래 12건)"""
+    rc = c.get("recompute") or {}
+    status = rc.get("status")
+    if not status:
+        return ""
+    if status == "ERROR":
+        return " · Spark 재계산 실패 (판정 값만 표시)"
+    w = rc.get("window") or {}
+    try:
+        long_span = datetime.fromisoformat(w["to"]) - datetime.fromisoformat(w["from"]) >= timedelta(hours=1)
+    except (KeyError, TypeError, ValueError):
+        long_span = False
+    span = f"{_kst_time(w.get('from'), long_span)}~{_kst_time(w.get('to'), long_span)} KST"
+    if status == "MATCH":
+        sm = rc.get("summary") or {}
+        cps = f", 상대 {sm['receiver_count']}곳" if "receiver_count" in sm else ""
+        return f" · Spark 재계산 일치 ({span}, 구성 거래 {rc.get('tx_count', 0)}건{cps})"
+    bad = [x for x in rc.get("checks") or [] if not x.get("match")]
+    diff = ", ".join(f"{x.get('label')} 판정 {_short_value(x.get('detector'))} / Spark {_short_value(x.get('spark'))}"
+                     for x in bad[:2])
+    return f" · Spark 재계산 불일치 ({span}, {diff})"
+
+
+def _short_value(v):
+    if isinstance(v, list):
+        return f"{len(v)}곳"
+    if isinstance(v, float):
+        return f"{v:,.2f}"
+    if isinstance(v, int):
+        return f"{v:,}"
+    return str(v)
+
+
 def _evidence_amount(c):
     """근거 거래가 없는 사건(L5·L7)은 Spark 근거의 금액으로 대신한다."""
     e = c.get("evidence") or {}
@@ -717,7 +764,7 @@ def _case_item(c, origins, amounts):
         "tx_hashes": c.get("tx_hashes") or [],
         "evidence": evidence,
         "evidence_raw": c.get("evidence") or {},
-        "headline": headline,
+        "headline": headline + _recompute_note(c),
         "counterpart": counterpart,
         "amount": round(amounts.get(str(c["_id"])) or _evidence_amount(c), 6),
         "decided": decided,
@@ -933,6 +980,7 @@ async def get_case(case_id: str):
         "otherCases": other_items,
         "audit": case_audit,
         "sdn": sdn,
+        "recompute": c.get("recompute"),
     }
     return detail                                     # response_model 이 형식을 검증하고 별칭(from·in)으로 내보낸다
 

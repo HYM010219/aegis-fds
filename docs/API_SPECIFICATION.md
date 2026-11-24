@@ -134,6 +134,29 @@ Spark 실시간 이상 탐지 엔진이 감지하여 적재한 FDS 사건 목록
 }
 ```
 
+* **`recompute`** (L2·L6·L7만, 없으면 `null`): 원본 거래를 Spark로 다시 계산한 근거 묶음 (`fds/spark/crosscheck.py`). 판정에는 쓰지 않는다.
+```json
+"recompute": {
+  "engine": "spark_recompute_v1",
+  "status": "MATCH",
+  "spark_batch_id": 1234,
+  "window": {"from": "2026-11-23T08:03:50.701+00:00", "to": "2026-11-23T08:08:50.701+00:00"},
+  "summary": {"send_count": 4, "send_sum": 52000.0, "receiver_count": 4},
+  "values": {"day_sum": 52000.0, "day_max": 13000.0, "day_count": 4},
+  "checks": [{"field": "day_sum", "label": "누적 송금액", "detector": 52000.0, "spark": 52000.0, "match": true}],
+  "minutes": [{"minute": "2026-11-23T08:08:00+00:00", "count": 4, "sum": 52000.0, "max": 13000.0, "receivers": 4}],
+  "tx_count": 4,
+  "txs": [{"tx_hash": "0x...", "to": "0x...", "amount": 13000.0, "timestamp": "2026-11-23T08:08:49.468+00:00"}],
+  "txs_truncated": false,
+  "late_tx_count": 0
+}
+```
+  * `status`: `MATCH` 판정 값과 같음 / `MISMATCH` 다름 (`checks`에서 항목 확인) / `ERROR` 재계산 실패 (`error`)
+  * `summary`: 계산 범위(demo 5분) 안 송금 횟수·합계·서로 다른 상대 주소 수. 비교할 판정 값이 없는 참고 값
+  * L6은 `baseline_window`·`detail`(`long_count`, `prior_count`, `days`), L7은 `history_from` 추가
+  * `headline` 끝에 같은 결과가 글로 붙는다 (`· Spark 재계산 일치 (…, 구성 거래 N건)`)
+* **STR 초안** `GET /api/v1/admin/cases/{case_id}/str-draft`: `str_report.spark_recompute`에 같은 묶음, `findings[]`에 `recomputed`·`recompute_match`, 본문 `text`에 **4-1. Spark 재계산** 절
+
 ---
 
 ### 2.5 자금 흐름 그래프 (Fund Flow Graph)

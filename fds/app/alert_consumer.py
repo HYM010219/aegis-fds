@@ -68,6 +68,12 @@ def merge_evidence(old, new):
     return merged
 
 
+def case_hashes(alert):
+    """사건에 남길 거래 해시: 경보 근거 거래 + Spark 재계산 구성 거래 (L7처럼 근거 거래가 빈 경보도 채워진다)."""
+    extra = [t.get("tx_hash") for t in (alert.get("recompute") or {}).get("txs") or []]
+    return sorted({h for h in list(alert["tx_hashes"]) + extra if h})
+
+
 def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
     """같은 룰과 지갑의 이어지는 사건이 있으면 합치고, 없으면 새 케이스를 만든다. 케이스 _id를 돌려준다."""
     rule_id = alert["rule_id"]
@@ -95,6 +101,8 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
         "alerted_at": alert.get("alerted_at"),
     }
 
+    recompute = alert.get("recompute")  # Spark 재계산 근거 묶음 (L2·L6·L7, spark/crosscheck.py)
+
     if existing:
         update = {
             "$set": {
@@ -107,8 +115,20 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
             },
             "$min": {"first_tx_at": first_tx_at},
             "$max": {"last_tx_at": last_tx_at},
-            "$addToSet": {"tx_hashes": {"$each": alert["tx_hashes"]}},
+            "$addToSet": {"tx_hashes": {"$each": case_hashes(alert)}},
         }
+        if recompute:
+            # 재계산이 붙은 경보는 근거를 숫자별 최댓값으로 섞지 않고 최신 경보 것으로 통째로 바꾼다.
+            # 섞으면 '합계는 A 시점, 최대는 B 시점'처럼 실제로 없던 조합이 남아 재계산 값과 맞지 않는다.
+            # 바뀌기 전 근거는 evidence_history에 남긴다 (최근 20개).
+            update["$set"]["evidence"] = alert["evidence"]
+            update["$set"]["recompute"] = recompute
+            update["$push"] = {"evidence_history": {"$each": [{
+                "evidence": existing.get("evidence"),
+                "source": existing.get("source"),
+                "recompute_status": (existing.get("recompute") or {}).get("status"),
+                "replaced_at": now,
+            }], "$slice": -20}}
         cases.update_one({"_id": existing["_id"]}, update)
         return existing["_id"]
 
@@ -119,10 +139,11 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
         "risk_level": risk_level,
         "violator_address": wallet,
         "counterparty_address": alert.get("counterparty_address"),
-        "tx_hashes": alert["tx_hashes"],
+        "tx_hashes": case_hashes(alert),
         "evidence": alert["evidence"],       # 실측값 (Spark 계산)
         "criteria": alert.get("criteria"),   # 판정 기준값 (spark/config.py)
         "source": source,
+        **({"recompute": recompute} if recompute else {}),  # Spark 재계산 근거 묶음 (L2·L6·L7)
         # 자동 동결이면 WALLET_FROZEN, 아니면 관제 직원 검토 대기
         "action_taken": "WALLET_FROZEN" if auto_freeze else "REVIEW_PENDING",
         "review_status": None if auto_freeze else "PENDING",

@@ -61,6 +61,13 @@ MAX_WALLETS_PER_BATCH = 2_000  # 한 배치에서 전체 분석할 최대 지갑
 RECHECK_PER_BATCH = 500        # 계기 ③: 한 배치에서 L5를 다시 계산할 상대 지갑 수
 MAX_HASHES = 50                # 경보에 담는 거래 해시 수
 
+# ---------- Spark 근거 재계산 (crosscheck.py) ----------
+# 판단에는 쓰지 않는다. L2·L6·L7 경보가 뜨면 원본 거래를 Spark로 다시 계산해 근거 묶음(recompute)을 붙인다.
+CROSSCHECK_ENABLED = os.getenv("CROSSCHECK_ENABLED", "1") == "1"   # 0이면 이전과 똑같이 동작
+CROSSCHECK_RULES = {"L2", "L6", "L7"}
+CROSSCHECK_MONEY_TOLERANCE = 0.01  # 금액 비교 허용 오차(USDT). 판정 값은 float, 재계산은 Decimal이라 미세한 차이는 같다고 본다
+CROSSCHECK_MAX_TXS = 500           # recompute에 담는 구성 거래 수 상한 (사건 문서 크기 제한, 넘으면 txs_truncated)
+
 # ---------- Redis 키 (Spark만 씀. 동결·블랙리스트 키는 common/keys.py) ----------
 WHITELIST_L_KEY = whitelist_key("L")         # 2단계 분석 면제 (거래소 등)
 ANALYZED_PREFIX = "fds:analyzed:"            # 최근에 분석한 지갑 (재분석 간격 TTL)

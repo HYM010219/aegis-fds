@@ -12,7 +12,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                   # detector.py
 sys.path.insert(0, os.path.dirname(HERE))  # common/keys.py (fds 폴더 = 컨테이너의 /app)
 from common.keys import ALERT_TOPIC, FREEZE_TOPIC, HOLD_TOPIC, TRANSFER_TOPIC  # noqa: E402
-from config import PROFILE_NAME, TICK_TOPIC  # noqa: E402
+import crosscheck  # noqa: E402
+from config import CROSSCHECK_ENABLED, PROFILE_NAME, TICK_TOPIC  # noqa: E402
 from detector import Detector  # noqa: E402
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
@@ -61,6 +62,10 @@ def process_batch(df, batch_id):
     started = time.time()
     rows = [(row.topic, row.value) for row in df.collect()]
     alerts, stats = detector.process(rows, batch_id=batch_id)
+
+    # 2-1) L2·L6·L7 경보는 원본 거래를 Spark로 다시 계산해 근거 묶음(recompute)을 붙인다 (판단은 바꾸지 않음, 실패해도 경보는 나감)
+    if alerts and CROSSCHECK_ENABLED:
+        stats.update(crosscheck.attach(spark, detector.db, alerts, batch_id=batch_id))
 
     # 3) 경보를 fds.alerts.v1로 보낸다. key를 지갑 주소로 두면 같은 지갑 경보는 순서대로 들어간다.
     if alerts:

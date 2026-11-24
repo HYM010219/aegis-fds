@@ -352,3 +352,19 @@ if not ALCHEMY_WSS:
 - **L8 CRITICAL**, **L6 새 지갑 제외**, **429 본문 `retry_after`**, compose 게이트웨이 healthcheck(`/healthz`).
 - 기본값 변경: **`L5_EXPOSURE=all`** (자동 동결도 L5 근거 — L5는 검토 대기라 직원이 판단), **`L1_HOLD_SIDE=sender`**.
 - 유지: R01 5번째 200+보류, `R05_LIMIT_USDT`, `L1_ACTION`, L8 증거 이름 `path`, ClickHouse `kafka:29092`.
+
+---
+
+## 12. [DE] L2·L6·L7 근거 Spark 재계산 (crosscheck) (11/24)
+- **목적**: 판정은 기존 규칙(Mongo 집계, `queries.py` → `rules.py`) 그대로 두고, L2·L6·L7 경보가 뜨면 **원본 거래를 Spark로 다시 계산한 근거 묶음(`recompute`)**을 붙인다. 사건 상세와 STR 초안이 같은 값을 글로 보여준다 (프론트 수정 없음).
+- **새 파일 `fds/spark/crosscheck.py`**: 경보 지갑의 승인 송금을 Mongo에서 한 번에 꺼내 Spark DataFrame으로 계산 (시각은 epoch ms, 금액은 Decimal(38,8)).
+  - 1분 단위 건수·합계·최대·상대 수, L2 하루(demo 5분) 합계·최대·건수, L6 오늘·평소 평균(계산 과정 포함), L7 '처음' 보낸 상대 수·목록
+  - 범위 요약 `summary`: 하루(demo 5분) 송금 횟수·합계·**서로 다른 상대 주소 수** (참고 값, 사건 요약 `상대 N곳`·STR 4-1 `범위 요약` 줄)
+  - 판정 값(`evidence`)과 항목별 비교 → `status` MATCH / MISMATCH / ERROR, 계산 범위, 1분 내역, 구성 거래(최대 500건, L7은 새 상대마다 처음 보낸 거래)
+  - 범위는 판정과 같은 정의 (경보 시각까지, 동결 해제 지갑은 해제 시각부터). 경보 시각 뒤 거래는 `late_tx_count`로만 남김
+  - 실패해도 경보는 그대로 나감 (`status: ERROR`)
+- **연결**: `stream.py`가 탐지 직후·Kafka 발행 전에 호출. `detector.py`는 경보에 조회 시작 시각 `history_from`을 남김. 스위치 `CROSSCHECK_ENABLED` (기본 1, 0이면 이전과 같음) · `config.py`
+- **경보 소비자**: 사건에 `recompute` 저장, 구성 거래 해시를 `tx_hashes`에 추가 (빈 목록이던 L7도 채워짐). `recompute`가 있는 경보는 **근거를 숫자별 최댓값으로 섞지 않고 최신 경보 것으로 통째로 교체**, 이전 근거는 `evidence_history`(최근 20개)
+- **표시 (백엔드만)**: 사건 한 줄 요약 끝에 `· Spark 재계산 일치 (10:05:00~10:10:00 KST, 구성 거래 12건)` / 불일치면 다른 항목과 두 값. 사건 상세 응답에 `recompute` 필드 (목록 API에는 없음). STR 초안 4번 항목마다 일치 여부, **4-1. Spark 재계산** 절(결과·계산 범위·판정 값 vs Spark 값·1분 내역·구성 거래), 계산 출처 `spark_engine_v1 + Spark 재계산 일치`
+- **검증 (11/24 로컬)**: 기존 판정 코드로 계산한 값을 넣은 L2·L6·L7 경보 39건 (실제 L2 사건 + 송금 상위 지갑 5개, 동결 해제 경로 포함) 모두 MATCH. 판정 값을 1 바꾼 3건은 모두 MISMATCH.
+- **반영**: `docker compose restart spark alert-consumer gateway` (코드는 볼륨 연결)

@@ -7,12 +7,14 @@
     실측값   fds_cases.evidence.*   Spark가 판정할 때 계산한 값 (spark/rules.py)
     기준값   fds_cases.criteria.*   판정에 쓴 기준 (spark/config.py)
     계산 출처 fds_cases.source       엔진·기간 설정(prod/demo)·Spark 배치 번호·계산 시각
+    재계산   fds_cases.recompute    L2·L6·L7: 원본 거래를 Spark로 다시 계산한 값·일치 여부·1분 내역·구성 거래 (spark/crosscheck.py)
     거래     transfers              케이스 거래 해시로 찾은 원장 원본
 그래서 사건 상세(GET /cases/{id})와 STR 초안에는 항상 같은 값이 보인다.
 
 최종 판단·제출은 고객사 보고책임자가 한다 (이 초안은 '보고 검토가 필요해 보임'까지만 쓴다). 제출 상태 관리(SUBMITTED)는 To-Be.
 """
 import os
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -186,6 +188,106 @@ def _findings(rule, ev, cr):
     return [], None
 
 
+# ---------- Spark 재계산 (fds_cases.recompute) ----------
+
+RC_WORD = {"MATCH": "일치", "MISMATCH": "불일치", "ERROR": "실패"}
+MONEY_FIELDS = {"day_sum", "day_max"}
+
+
+def _attach_recompute(findings, rc):
+    """기준 대비 실측 줄마다 Spark 재계산 값과 일치 여부를 붙인다 (같은 evidence 필드끼리)."""
+    checks = {x.get("field"): x for x in rc.get("checks") or []}
+    for f in findings:
+        key = f["measured_from"].rsplit(".", 1)[-1]
+        x = checks.get(key)
+        if x:
+            f["recomputed"] = x.get("spark")
+            f["recompute_match"] = x.get("match")
+            f["recomputed_from"] = f"fds_cases.recompute.values.{key}"
+
+
+def _rc_value(field, v):
+    if v is None:
+        return "-"
+    if isinstance(v, list):
+        return f"{len(v)}곳"
+    if field in MONEY_FIELDS:
+        return _usdt(v)
+    return f"{v:,}" if isinstance(v, int) else str(v)
+
+
+def _width(s):
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+
+
+def _pad(s, n):
+    """한글이 섞여도 고정폭 글꼴에서 줄이 맞게 채운다."""
+    s = str(s)
+    return s + " " * max(n - _width(s), 0)
+
+
+def _hms(iso):
+    return datetime.fromisoformat(iso).astimezone(KST).strftime("%H:%M:%S") if iso else ""
+
+
+def _window_label(w):
+    """계산 범위 길이를 글로 (5분, 24시간). 동결 해제 지갑은 더 짧을 수 있다."""
+    try:
+        s = int((datetime.fromisoformat(w["to"]) - datetime.fromisoformat(w["from"])).total_seconds())
+    except (KeyError, TypeError, ValueError):
+        return "범위 안"
+    if s >= 3600 and s % 3600 == 0:
+        return f"{s // 3600}시간"
+    return f"{s // 60}분" if s % 60 == 0 else f"{s}초"
+
+
+def _render_recompute(rc):
+    """초안 본문 4-1. Spark 재계산 (판정 값과 나란히, 1분 내역, 구성 거래)."""
+    if not rc:
+        return []
+    rows = ["4-1. Spark 재계산 (출처: fds_cases.recompute · spark/crosscheck.py, 원본 transfers 승인 송금)"]
+    rows.append(f"   결과        {RC_WORD.get(rc.get('status'), rc.get('status'))} · 배치 {rc.get('spark_batch_id')} · "
+                f"{_kst(rc.get('computed_at'))}")
+    if rc.get("status") == "ERROR":
+        rows.append(f"   오류        {rc.get('error')} (판정 값만 사용)")
+        return rows
+    w = rc.get("window") or {}
+    rows.append(f"   계산 범위   {_kst(w.get('from'))} ~ {_kst(w.get('to'))} (경보 시각까지)")
+    sm = rc.get("summary")
+    if sm:
+        rows.append(f"   범위 요약   {_window_label(w)} 송금 {sm.get('send_count')}건 · {_usdt(sm.get('send_sum'))} · "
+                    f"상대 주소 {sm.get('receiver_count')}곳")
+    if rc.get("baseline_window"):
+        b, d = rc["baseline_window"], rc.get("detail") or {}
+        rows.append(f"   평소 범위   {_kst(b.get('from'))} ~ {_kst(b.get('to'))} · 이전 송금 {d.get('prior_count')}건 "
+                    f"÷ max({d.get('days')} - 1, 1)일")
+    if rc.get("history_from"):
+        rows.append(f"   '처음' 기준  {_kst(rc['history_from'])} 이후 기록에 없던 상대")
+    rows.append(f"   {_pad('항목', 22)}{_pad('판정 값', 22)}{_pad('Spark 값', 22)}결과")
+    for x in rc.get("checks") or []:
+        rows.append(f"   {_pad(x.get('label'), 22)}{_pad(_rc_value(x.get('field'), x.get('detector')), 22)}"
+                    f"{_pad(_rc_value(x.get('field'), x.get('spark')), 22)}{'일치' if x.get('match') else '불일치'}")
+    if rc.get("status") == "MISMATCH" and rc.get("late_tx_count"):
+        rows.append(f"   참고        경보 시각 뒤에 들어온 거래 {rc['late_tx_count']}건은 재계산에서 뺐음 (차이 원인일 수 있음)")
+    minutes = rc.get("minutes") or []
+    rows.append(f"   1분 내역 (KST, 거래가 있던 분만 {len(minutes)}개)")
+    rows.append(f"     {_pad('시각', 10)}{_pad('건수', 6)}{_pad('합계', 22)}{_pad('최대', 22)}상대")
+    for m in minutes[:30]:
+        rows.append(f"     {_pad(_hms(m.get('minute'))[:5], 10)}{_pad(m.get('count'), 6)}{_pad(_usdt(m.get('sum')), 22)}"
+                    f"{_pad(_usdt(m.get('max')), 22)}{m.get('receivers')}")
+    if len(minutes) > 30:
+        rows.append(f"     … 외 {len(minutes) - 30}분")
+    txs = rc.get("txs") or []
+    label = "새 상대마다 처음 보낸 거래" if rc.get("rule_id") == "L7" else "Spark가 합산한 거래"
+    rows.append(f"   구성 거래 {rc.get('tx_count', len(txs))}건 ({label})"
+                + (" · 일부만 저장됨" if rc.get("txs_truncated") else ""))
+    for t in txs[:20]:
+        rows.append(f"     {_hms(t.get('timestamp'))}  {_usdt(t.get('amount'))}  → {t.get('to')}  {t.get('tx_hash')}")
+    if len(txs) > 20:
+        rows.append(f"     … 외 {len(txs) - 20}건")
+    return rows
+
+
 # ---------- 초안 만들기 ----------
 
 async def _case(case_id):
@@ -219,6 +321,8 @@ async def build_draft(case):
         findings, reason = [], f"직원 직접 동결: {c.get('review_rationale')}"
     else:
         findings, reason = _findings(rule, ev, cr)
+    rc = c.get("recompute") or {}
+    _attach_recompute(findings, rc)
     status_text = flags["frozen_reason"] or ("BLACKLISTED" if flags["blacklisted"] else "NOT_FROZEN")
     draft_text = (
         f"{reason}. 이에 따라 특정금융정보법 제4조에 따른 의심거래보고 검토가 필요한 것으로 보임. "
@@ -268,12 +372,18 @@ async def build_draft(case):
             "final_opinion": opinion.get("final_opinion"),
             "updated_at": opinion.get("updated_at"),
         },
+        "spark_recompute": rc or None,     # 케이스의 재계산 근거 묶음 그대로 (없으면 None)
         "provenance": {
             "note": "초안의 숫자는 새로 계산하지 않고 케이스에 저장된 값을 그대로 쓴다 (사건 상세와 같은 값)",
             "case": f"fds_cases/{c['id']}",
             "measured_values": "fds_cases.evidence (Spark 판정 시 계산, spark/rules.py)",
             "thresholds": "fds_cases.criteria (판정 기준, spark/config.py)",
-            "computed_by": src.get("engine"),
+            "recomputed_values": "fds_cases.recompute (원본 거래 Spark 재계산, spark/crosscheck.py)" if rc else None,
+            "recompute_status": rc.get("status"),
+            "recompute_batch_id": rc.get("spark_batch_id"),
+            "recompute_at": rc.get("computed_at"),
+            "computed_by": f"{src.get('engine')} + Spark 재계산 {RC_WORD.get(rc.get('status'), rc.get('status'))}"
+                           if rc else src.get("engine"),
             "period_profile": src.get("period_profile"),
             "spark_batch_id": src.get("batch_id"),
             "computed_at": src.get("alerted_at"),
@@ -304,7 +414,9 @@ def _render(r):
     rows.append("4. 기준 대비 실측 (출처: 케이스 증거)")
     for f in s["findings"]:
         th = f" (기준 {f['threshold']})" if f.get("threshold") else ""
-        rows.append(f"   - {f['item']}: {f['measured_display']}{th}")
+        rc_note = f" · Spark 재계산 {'일치' if f['recompute_match'] else '불일치'}" if "recompute_match" in f else ""
+        rows.append(f"   - {f['item']}: {f['measured_display']}{th}{rc_note}")
+    rows += _render_recompute(r.get("spark_recompute"))
     rows += [
         "5. 의심 사유 (자동 생성 → 분석관 편집 가능)",
         f"   {op['final_opinion'] or op['generated_draft'] or ''}",

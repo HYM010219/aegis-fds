@@ -1,5 +1,7 @@
 # FE 기존 화면 API 연결 안내
 
+**화면 확인 순서와 숫자 비교는 [L8·R01 검증 체크리스트](FE_VERIFICATION_CHECKLIST.md)를 따른다.** 아래 문서는 API 참고 자료다. 사건을 조회할 서버와 사건 번호를 BE가 먼저 전달해야 하며, R01 기본 목록 숨김 문제를 FE에게 새 화면으로 해결하라고 요청하지 않는다.
+
 > **최신 integration 확인 결과:** `14be4af0`의 `web/src/admin/pages/CaseDetail.jsx`는 이미 `api.strDraft(caseId)`로 서버 초안을 조회하고 `report.text`를 표시·다운로드하며 분석관 의견 저장도 지원한다. 아래 내용은 로컬 검증 서버의 응답 계약이다. 최신 FE 구현을 덮어쓰거나 같은 기능을 다시 만들지 말고, BE와 응답 호환성을 확인한다. 최신 코드가 사용하는 `provenance`, `report_id`, `analyst_opinion`과 로컬의 `snapshot`은 같은 응답 형식이라고 가정하지 않는다.
 
 화면 구성은 FE 담당 범위다. 별도 Spark 집계 페이지나 봇 실행 버튼은 추가하지 않는다. 테스트 데이터 주입과 컨테이너 운영은 BE가 맡는다.

@@ -1,5 +1,7 @@
 # BOT2·BOT3 테스트 전달 자료
 
+**FE는 [검증 체크리스트](FE_VERIFICATION_CHECKLIST.md)부터 읽고 확인한다.** 대상은 L8 순환거래·R01 고빈도 송금 두 개다. 성공 사건 번호, 비교할 값, 서버가 다를 때 조회되지 않는 이유, 담당별 선행 작업과 결과표를 한 문서에 정리했다. R01의 기존 화면 노출은 아직 선행 확인이 필요하며 두 규칙 모두 화면 검수 완료로 보고하지 않는다.
+
 > GitHub 공유 기준: `integration`의 `14be4af024e08041a994b1cf0e4ed7e1dbedd968`을 확인했다. 최신 FE에는 서버 STR 조회·의견 저장이 이미 구현되어 있다. 그 코드를 되돌리거나 새 화면을 만들지 않는다. 이 폴더는 별도의 로컬 백엔드에서 수행한 주입 결과와 참고 스크립트이며, 최신 integration 전체를 재검증했다는 뜻은 아니다.
 
 프론트 화면을 추가하거나 바꾸지 않고, 백엔드에서 데이터를 주입하고 FE 담당자가 기존 경보·사건·그래프·STR에 연결하기 위한 자료다. 별도 Spark 집계 탭·봇 실행 패널은 요청하지 않는다.
@@ -72,6 +74,7 @@ Get-Content -Raw -Encoding UTF8 Bot2_Bot3_Test/verify_original_frontend_roundtri
 ## 파일 안내
 
 - `API_GUIDE.md`: FE에게 전달할 API·인증·STR 연결 설명.
+- `FE_VERIFICATION_CHECKLIST.md`: 화면과 보고서에서 무엇을 비교하는지, 두 사례의 기대값과 확인 결과표.
 - `LATEST_L8_RESULT.json`: 사용자가 제공한 최신 실행 성공 출력.
 - `verify_demo.py`: BE용 주입·검증 스크립트.
 - `verify_original_frontend_roundtrip.py`: BE용 읽기 전용 전체 경로 대조.

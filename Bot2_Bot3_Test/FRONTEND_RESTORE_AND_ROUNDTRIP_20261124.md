@@ -59,4 +59,4 @@ Get-Content -Raw -Encoding UTF8 scripts/verify_original_frontend_roundtrip.py | 
 
 기존 사건 화면: `http://127.0.0.1:8080/admin/#/cases/6b04ff100591fcf002525476`
 
-브라우저 시각·클릭·원래 프론트가 생성하는 TXT의 새 다운로드 검수는 하지 않았다. 이번 확인은 원상복구 diff·프론트 빌드와 실제 백엔드 API·저장 데이터 기반이다. 백엔드 코드·시험 코드·과거 리포트는 보존했다. Git commit/push와 AWS/k3s 배포는 수행하지 않았다.
+브라우저 시각·클릭·원래 프론트가 생성하는 TXT의 새 다운로드 검수는 하지 않았다. 이번 확인은 원상복구 diff·프론트 빌드와 실제 백엔드 API·저장 데이터 기반이다. 백엔드 코드·시험 코드·과거 리포트는 보존했다.

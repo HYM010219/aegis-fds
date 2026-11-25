@@ -32,5 +32,7 @@ analyze_*.py
 measure_*.ps1
 patch_*.diff
 run_*.py
+!bots/run_bots.py
 test_*.py
+bot_runs/
 

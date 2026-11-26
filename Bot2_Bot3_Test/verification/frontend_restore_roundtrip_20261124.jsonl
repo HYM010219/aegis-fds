@@ -1,2 +1,0 @@
-{"scenario": "BOT3_L8", "run_id": "verify-e3a5edde-4678-49bc-a583-6d211d8fc8be", "state": "started"}
-{"scenario": "BOT3_L8", "run_id": "verify-e3a5edde-4678-49bc-a583-6d211d8fc8be", "http_results": [200, 200, 200, 200, 200, 200, 200], "status": "COMPLETED", "case_id": "6b04ff100591fcf002525476", "nodes": 7, "edges": 7, "highlighted_edges": 3, "return_ratio": 0.9, "snapshot_id": "9c815771b630920225acfc58972326247ca432ad94cd22e234d685fa9c8ef0f3", "spark_batch": 18724}

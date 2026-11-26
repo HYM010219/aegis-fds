@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Aegis-FDS 이상거래 봇 주입기 (bot2 · bot3) — 시연·측정용
 
@@ -232,7 +232,7 @@ def main():
         if not os.getenv("MIX_RATE_STATE"):
             sys.exit("--paced requires MIX_RATE_STATE; use bots/stream_all.py")
         from rate_control import RealRateGate
-        cfg["pacer"] = RealRateGate(os.environ["MIX_RATE_STATE"], float(os.getenv("MIX_BOT_RATIO", "0.5")))
+        cfg["pacer"] = RealRateGate(os.environ["MIX_RATE_STATE"], float(os.getenv("MIX_BOT_RATIO", "1.0")))
     if not a.dry_run and not (cfg["gw_key"] and cfg["admin_key"]):
         sys.exit("GATEWAY_API_KEY / ADMIN_API_KEY가 없습니다 (환경 변수 또는 루트 .env)")
     if a.slow > 3:

@@ -1,4 +1,4 @@
-"""Optional local mixer: earn half a bot request per completed real FDS request.
+"""Optional local mixer: earn one bot request per completed real FDS request.
 
 One real producer and one bot producer share an atomic counter file.
 Burst credits accumulate up to capacity and pace evenly, while pauses/outages
@@ -25,7 +25,7 @@ def record_real_ingress(status):
 
 
 class RealRateGate:
-    def __init__(self, filename, ratio=0.5, max_credit=10.0, min_interval=0.05,
+    def __init__(self, filename, ratio=1.0, max_credit=10.0, min_interval=0.05,
                  stale_timeout=2.0, clock=time.time, sleep=time.sleep):
         if not 0 < ratio <= 1:
             raise ValueError('bot ratio must be greater than 0 and at most 1')

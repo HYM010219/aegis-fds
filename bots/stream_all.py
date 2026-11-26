@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real ingress + bots at approximately 2:1. Use --live or a golden recording.
+"""Real ingress + bots at approximately 1:1. Use --live or a golden recording.
 
 The live mode starts its own collector: keep the Kubernetes collector stopped.
 """
@@ -38,7 +38,7 @@ def main():
     parser.add_argument('--real-speed', type=float, default=1)
     parser.add_argument('--prefix', default='LOOP')
     parser.add_argument('--input', type=Path, default=ROOT/'data/onchain/golden_r3_30min.jsonl', help='Replay JSONL file, including an AWS collector recording')
-    parser.add_argument('--bot-ratio', type=float, default=.5, help='bot / real ingress target')
+    parser.add_argument('--bot-ratio', type=float, default=1.0, help='bot / real ingress target')
     parser.add_argument('--only', nargs='+', choices=ALL, default=['L2','L6','L7','L8','BOT2_HOT'])
     parser.add_argument('--record-dir', type=Path, default=ROOT/'data/onchain')
     args = parser.parse_args()

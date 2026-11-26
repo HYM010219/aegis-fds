@@ -130,7 +130,9 @@ services:
     restart: unless-stopped
 
   spark:
-    build: ./fds/spark             # 공식 Spark 이미지 + pymongo, redis
+    build:                         # 공식 Spark 이미지 + pymongo, redis + spark/·common/ 코드 (k3s용)
+      context: ./fds
+      dockerfile: spark/Dockerfile
     container_name: aegis-spark
     user: root
     command: >

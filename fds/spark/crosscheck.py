@@ -2,7 +2,7 @@
 
 판단은 하지 않는다. 경보 여부·자동 동결은 기존 규칙(queries.py → rules.py)이 정하고, 여기서는
     1) 경보 지갑의 원본 거래(Mongo transfers, 승인된 송금)를 한 번에 꺼내
-    2) Spark DataFrame으로 1분 단위 건수·금액·상대 수와 규칙별 값을 계산하고
+    2) Spark DataFrame으로 1분 단위 건수·금액·상대 수, 5분 이동 윈도(Spark window(), 1분 간격)와 규칙별 값을 계산하고
          L2  하루(demo 5분) 송금 합계·최대·건수
          L6  하루 송금 수, 장기 송금 수 → 평소 하루 평균
          L7  하루 안에 '처음' 보낸 상대 (장기 이력에 없던 상대)
@@ -43,6 +43,8 @@ ENGINE = "spark_recompute_v1"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 ONE_MS = timedelta(milliseconds=1)
 CENT = Decimal("0.00000001")  # Decimal(38, 8)
+WINDOW_MINUTES, SLIDE_MINUTES = 5, 1  # 5분 이동 윈도, 1분마다 이동
+MAX_WINDOWS = 60                      # recompute에 담는 윈도 수 상한 (경보 시각에 가까운 것부터, 최댓값은 따로 남김)
 
 TX_SCHEMA = StructType([
     StructField("wallet", StringType(), False),
@@ -166,6 +168,19 @@ def _compute(spark, keyed, tx_rows):
                     F.max("amount").alias("max"), F.countDistinct("to").alias("receivers"))
                .orderBy("k", "minute").collect())
 
+    # 5분 이동 윈도: Spark window()로 범위 안 송금을 5분 구간(1분마다 이동)으로 묶어 건수·금액·서로 다른 상대 수.
+    # 시각은 ms → timestamp로 바꿔 쓰고, 구간 시작·끝은 다시 epoch ms로 꺼낸다 (시간대 변환을 타지 않게).
+    windows = (j.where(in_day)
+               .withColumn("t", F.timestamp_seconds(F.col("ts") / 1000))
+               .groupBy("k", F.window("t", f"{WINDOW_MINUTES} minutes", f"{SLIDE_MINUTES} minute"))
+               .agg(F.count(F.lit(1)).alias("count"), F.sum("amount").alias("sum"),
+                    F.countDistinct("to").alias("receivers"))
+               .select("k",
+                       (F.col("window.start").cast("long") * 1000).alias("start"),
+                       (F.col("window.end").cast("long") * 1000).alias("end"),
+                       "count", "sum", "receivers")
+               .orderBy("k", "start").collect())
+
     day_txs = j.where(in_day).select("k", "tx_hash", "to", "amount", "ts").orderBy("k", "ts").collect()
 
     # L7: 상대별로 이력 안에서 처음 보낸 시각. 그 시각이 하루 범위 안이면 '처음 보낸 상대'
@@ -175,11 +190,13 @@ def _compute(spark, keyed, tx_rows):
               .where(F.col("first") >= F.col("day_from"))
               .orderBy("k", "first").collect())
 
-    out = defaultdict(lambda: {"totals": None, "minutes": [], "day_txs": [], "firsts": []})
+    out = defaultdict(lambda: {"totals": None, "minutes": [], "windows": [], "day_txs": [], "firsts": []})
     for r in totals:
         out[r["k"]]["totals"] = r
     for r in minutes:
         out[r["k"]]["minutes"].append(r)
+    for r in windows:
+        out[r["k"]]["windows"].append(r)
     for r in day_txs:
         out[r["k"]]["day_txs"].append(r)
     for r in firsts:
@@ -214,6 +231,24 @@ def _summary(t):
     if not t:
         return {"send_count": 0, "send_sum": 0.0, "receiver_count": 0}
     return {"send_count": int(t["day_count"]), "send_sum": _num(t["day_sum"]), "receiver_count": int(t["day_receivers"])}
+
+
+def _windows(rows):
+    """5분 이동 윈도 결과. 거래가 있던 구간만 있고, 가장 많이 보낸 구간과 상대가 가장 많았던 구간을 따로 남긴다.
+    범위 안 거래만 세므로 범위 처음·끝에 걸친 구간은 일부 시간만 담긴다."""
+    items = [{"start": _iso_ms(r["start"]), "end": _iso_ms(r["end"]), "count": int(r["count"]),
+              "sum": _num(r["sum"]), "receivers": int(r["receivers"])} for r in rows]
+    return {
+        "engine": "spark.sql.functions.window",
+        "size_minutes": WINDOW_MINUTES,
+        "slide_minutes": SLIDE_MINUTES,
+        "window_count": len(items),
+        # 같은 값이면 먼저 나온(이른) 구간
+        "peak_count": max(items, key=lambda x: x["count"]) if items else None,
+        "peak_receivers": max(items, key=lambda x: x["receivers"]) if items else None,
+        "items": items[-MAX_WINDOWS:],
+        "items_truncated": len(items) > MAX_WINDOWS,
+    }
 
 
 def _same(kind, a, b):
@@ -259,6 +294,8 @@ def _recompute(alert, res, b, late, batch_id):
         "checks": checks,
         "minutes": [{"minute": _iso_ms(m["minute"]), "count": int(m["count"]), "sum": _num(m["sum"]),
                      "max": _num(m["max"]), "receivers": int(m["receivers"])} for m in res["minutes"]],
+        # 5분 이동 윈도 (Spark window()). 판정에는 쓰지 않는 참고 근거
+        "windows_5m": _windows(res["windows"]),
         "tx_count": len(txs),
         "txs": txs[:CROSSCHECK_MAX_TXS],
         "txs_truncated": len(txs) > CROSSCHECK_MAX_TXS,

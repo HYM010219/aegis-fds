@@ -19,16 +19,18 @@ spec:
     spec:
       containers:
         - name: collector
-          image: aegis-gateway:latest
+          # 수집기 전용 이미지: docker build -f collector/Dockerfile -t aegis-collector:latest . (저장소 루트에서)
+          image: aegis-collector:latest
           imagePullPolicy: Never
           command: ["python", "-m", "collector.collector_alchemy"]
           envFrom:
             - configMapRef:
                 name: aegis-config
             - secretRef:
-                name: aegis-env
+                name: aegis-env   # GATEWAY_API_KEY, ALCHEMY_WSS_URL
           env:
-            - name: GATEWAY_URL
+            # 수집기 코드가 읽는 이름은 FASTAPI_URL (collector_alchemy.py). .env의 localhost 값보다 여기 값이 우선한다.
+            - name: FASTAPI_URL
               value: "http://gateway:8000/api/v1/transfers"
           resources:
             requests:

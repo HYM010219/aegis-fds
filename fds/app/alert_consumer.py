@@ -22,6 +22,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 BATCH_SIZE = 500                  # 한 번에 가져올 경보 수
 RETRY_INTERVAL = 3                # 오류가 났을 때 쉬는 시간(초)
 CASE_GAP = timedelta(minutes=10)  # 거래 시각 기준으로 이 시간 넘게 끊기면 새 사건
+ALERT_IDS_KEEP = 200              # 케이스에 남기는 최근 경보 번호 수 (Spark 재발행 중복 확인용)
 
 # 자동 동결할 룰. 나머지(L4~L7)는 케이스만 만들고 관제 직원이 검토 후 동결한다.
 # 실험 스위치 L1_ACTION: review 이면 L1을 자동 동결하지 않고 검토 대기로 (기본 freeze = 지금 동작)
@@ -117,18 +118,20 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
             "$max": {"last_tx_at": last_tx_at},
             "$addToSet": {"tx_hashes": {"$each": case_hashes(alert)}},
         }
+        if alert.get("alert_id"):
+            update["$push"] = {"alert_ids": {"$each": [alert["alert_id"]], "$slice": -ALERT_IDS_KEEP}}
         if recompute:
             # 재계산이 붙은 경보는 근거를 숫자별 최댓값으로 섞지 않고 최신 경보 것으로 통째로 바꾼다.
             # 섞으면 '합계는 A 시점, 최대는 B 시점'처럼 실제로 없던 조합이 남아 재계산 값과 맞지 않는다.
             # 바뀌기 전 근거는 evidence_history에 남긴다 (최근 20개).
             update["$set"]["evidence"] = alert["evidence"]
             update["$set"]["recompute"] = recompute
-            update["$push"] = {"evidence_history": {"$each": [{
+            update.setdefault("$push", {})["evidence_history"] = {"$each": [{
                 "evidence": existing.get("evidence"),
                 "source": existing.get("source"),
                 "recompute_status": (existing.get("recompute") or {}).get("status"),
                 "replaced_at": now,
-            }], "$slice": -20}}
+            }], "$slice": -20}
         cases.update_one({"_id": existing["_id"]}, update)
         return existing["_id"]
 
@@ -144,6 +147,7 @@ def save_case(alert, first_tx_at, last_tx_at, auto_freeze):
         "criteria": alert.get("criteria"),   # 판정 기준값 (spark/config.py)
         "source": source,
         **({"recompute": recompute} if recompute else {}),  # Spark 재계산 근거 묶음 (L2·L6·L7)
+        "alert_ids": [alert["alert_id"]] if alert.get("alert_id") else [],  # 반영한 경보 번호 (중복 확인)
         # 자동 동결이면 WALLET_FROZEN, 아니면 관제 직원 검토 대기
         "action_taken": "WALLET_FROZEN" if auto_freeze else "REVIEW_PENDING",
         "review_status": None if auto_freeze else "PENDING",
@@ -228,7 +232,15 @@ def handle_alert(alert):
 
     auto_freeze = rule_id in AUTO_FREEZE_RULES
     # 저장 먼저, 동결은 그다음. 어느 쪽이 실패해도 다시 처리하면 같은 결과가 된다.
-    case_id = save_case(alert, first_tx_at, last_tx_at, auto_freeze)
+    # Spark가 같은 경보를 한 번 더 보낸 경우(spark/alert_outbox.py): 케이스는 다시 합치지 않고 동결만 이어서 확인한다
+    # (케이스 저장 뒤 동결 전에 죽었다면 여기서 동결이 마저 된다).
+    alert_id = alert.get("alert_id")
+    seen = cases.find_one({"alert_ids": alert_id}, {"_id": 1}) if alert_id else None
+    if seen:
+        case_id = seen["_id"]
+        logger.info(f"이미 반영한 경보 {alert_id}")
+    else:
+        case_id = save_case(alert, first_tx_at, last_tx_at, auto_freeze)
     if auto_freeze:
         freeze_wallet(wallet, rule_id, alert["rule_name"], case_id)
 
@@ -255,6 +267,8 @@ def main():
     cases.create_index([("rule_id", 1), ("violator_address", 1), ("last_tx_at", -1)])
     # 관제 화면의 검토 대기 목록용
     cases.create_index([("review_status", 1), ("risk_level", 1), ("detected_at", -1)])
+    # Spark 재발행 경보 중복 확인용 (spark/alert_outbox.py)
+    cases.create_index("alert_ids")
     # 감사 원장: 같은 자동 동결이 두 번 들어가지 않게 (게이트웨이도 같은 인덱스를 만든다)
     decisions.create_index("decision_id", unique=True)
 

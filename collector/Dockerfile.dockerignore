@@ -1,0 +1,5 @@
+# 수집기 이미지 전용. 빌드 위치(저장소 루트)에서 수집기 코드와 bots/rate_control.py만 넣는다.
+*
+!collector/collector_alchemy.py
+!collector/requirements.txt
+!bots/rate_control.py

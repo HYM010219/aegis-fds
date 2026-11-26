@@ -724,7 +724,9 @@ def _recompute_note(c):
     if status == "MATCH":
         sm = rc.get("summary") or {}
         cps = f", 상대 {sm['receiver_count']}곳" if "receiver_count" in sm else ""
-        return f" · Spark 재계산 일치 ({span}, 구성 거래 {rc.get('tx_count', 0)}건{cps})"
+        peak = (rc.get("windows_5m") or {}).get("peak_count")
+        w5 = f", 5분 최대 {peak['count']}건" if peak else ""
+        return f" · Spark 재계산 일치 ({span}, 구성 거래 {rc.get('tx_count', 0)}건{cps}{w5})"
     bad = [x for x in rc.get("checks") or [] if not x.get("match")]
     diff = ", ".join(f"{x.get('label')} 판정 {_short_value(x.get('detector'))} / Spark {_short_value(x.get('spark'))}"
                      for x in bad[:2])

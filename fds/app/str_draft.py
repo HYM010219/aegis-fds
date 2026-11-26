@@ -241,6 +241,23 @@ def _window_label(w):
     return f"{s // 60}분" if s % 60 == 0 else f"{s}초"
 
 
+def _render_windows(w5):
+    """4-1 안의 5분 이동 윈도 (Spark window()). 가장 많이 보낸 구간·상대가 가장 많았던 구간."""
+    if not w5 or not w5.get("peak_count"):
+        return []
+    pc, pr = w5["peak_count"], w5.get("peak_receivers") or {}
+
+    def span(x):
+        return f"{_hms(x.get('start'))[:5]}~{_hms(x.get('end'))[:5]} KST"
+
+    return [
+        f"   {w5.get('size_minutes')}분 이동 윈도 (Spark window(), {w5.get('slide_minutes')}분 간격, "
+        f"거래가 있던 구간 {w5.get('window_count')}개)",
+        f"     최대 송금 횟수  {pc.get('count')}건 · {_usdt(pc.get('sum'))} ({span(pc)})",
+        f"     최대 상대 수    {pr.get('receivers')}곳 ({span(pr)})",
+    ]
+
+
 def _render_recompute(rc):
     """초안 본문 4-1. Spark 재계산 (판정 값과 나란히, 1분 내역, 구성 거래)."""
     if not rc:
@@ -277,6 +294,7 @@ def _render_recompute(rc):
                     f"{_pad(_usdt(m.get('max')), 22)}{m.get('receivers')}")
     if len(minutes) > 30:
         rows.append(f"     … 외 {len(minutes) - 30}분")
+    rows += _render_windows(rc.get("windows_5m"))
     txs = rc.get("txs") or []
     label = "새 상대마다 처음 보낸 거래" if rc.get("rule_id") == "L7" else "Spark가 합산한 거래"
     rows.append(f"   구성 거래 {rc.get('tx_count', len(txs))}건 ({label})"

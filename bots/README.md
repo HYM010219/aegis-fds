@@ -15,7 +15,8 @@ Spark 재계산·STR 구현(`14be4af`)에 봇을 주입한 로컬 검증 기록�
 ```bash
 python bots/run_bots.py --dry-run --only L2 L6 L7
 python bots/run_bots.py --once --only L2 L6 L7
-python replay_golden.py --input data/onchain/usdt_20261124.jsonl --inspect-only
+python bots/replay_golden.py --input data/onchain/usdt_20261124.jsonl --inspect-only
+python bots/seed_whitelist.py bots/whitelist_seed.csv --dry-run
 python bots/stream_all.py --input data/onchain/usdt_20261124.jsonl --bot-ratio 1.0
 ```
 

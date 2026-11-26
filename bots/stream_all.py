@@ -41,7 +41,7 @@ def read_count(path, key):
 def start_real(args, number, env):
     if args.live:
         return subprocess.Popen([PY, 'collector/collector_alchemy.py', '--record', str(args.record_dir)], cwd=ROOT, env=env)
-    return subprocess.Popen([PY, 'replay_golden.py', '-r', f'{args.prefix}{number}',
+    return subprocess.Popen([PY, 'bots/replay_golden.py', '-r', f'{args.prefix}{number}',
         '-s', str(args.real_speed), '--input', str(args.input), '--gateway-url', env['FASTAPI_URL']], cwd=ROOT, env=env)
 
 

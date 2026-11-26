@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
-"""Real ingress + bots at approximately 1:1. Use --live or a golden recording.
+"""
+Aegis-FDS 실데이터·이상거래 봇 혼합 실행기
 
-The live mode starts its own collector: keep the Kubernetes collector stopped.
+- 실시간 수집 또는 녹화 파일 재생과 봇 주입기를 함께 실행한다.
+- 기본 목표는 실데이터 1건당 봇 1건(100%). 실데이터 유입에 맞춰 봇 전송을 허용한다.
+- 10초마다 실데이터·봇 건수와 초당 처리량, 비율을 bot_runs/mix-*.csv에 기록한다.
+- 실시간 모드는 수집기를 직접 실행하므로 Kubernetes 수집기는 중지한 상태로 사용한다.
+
+사용법 (저장소 맨 위 폴더에서)
+  python bots/stream_all.py --live
+  python bots/stream_all.py --input data/onchain/usdt_20261124.jsonl --bot-ratio 1.0
+  옵션: --real-speed 1 (녹화 재생 배속) · --only L2 L6 L7 (실행할 봇 선택)
+
+환경 변수 (없으면 저장소 루트 .env에서 읽음)
+  GATEWAY_API_KEY, ADMIN_API_KEY, BOT_BASE_URL
+  실시간 수집: ALCHEMY_WSS_URL
 """
 import argparse
 import csv

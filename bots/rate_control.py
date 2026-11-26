@@ -1,8 +1,10 @@
-"""Optional local mixer: earn one bot request per completed real FDS request.
+"""
+Aegis-FDS 혼합 시연의 봇 주입 속도 제어
 
-One real producer and one bot producer share an atomic counter file.
-Burst credits accumulate up to capacity and pace evenly, while pauses/outages
-never produce catch-up backlog bursts.
+- 수집기·재생기가 기록한 실데이터 응답 건수를 읽어 봇 전송 허용량을 계산한다.
+- 기본 비율은 실데이터 1건당 봇 1건(100%). 허용량은 최대 10건까지 쌓고 0.05초 이상 간격을 둔다.
+- 실데이터 갱신이 2초 넘게 멈추면 봇도 대기한다. 재개 시 중단 동안 쌓인 건수는 제외한다.
+- 실데이터와 봇 실행기 각각 1개가 상태 파일을 공유하는 로컬 시연용이다.
 """
 import json
 import os

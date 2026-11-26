@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Aegis-FDS 이상거래 봇 주입기 (bot2 · bot3) — 시연·측정용
 
@@ -13,7 +13,7 @@ Aegis-FDS 이상거래 봇 주입기 (bot2 · bot3) — 시연·측정용
   python bots/run_bots.py --once --only L8 R04      # 일부만
   python bots/run_bots.py --continuous              # 각 3회 보장 후 60:40 가중 반복 (Ctrl+C로 중지)
   옵션: --slow 2.0 (시나리오 간격 배수, 실데이터 비율과 별개) · --round-gap 30
-  실데이터의 절반으로 섞기: python bots/stream_all.py (--paced 자동 적용)
+  실데이터와 1:1로 섞기: python bots/stream_all.py (--paced 자동 적용)
 
 환경 변수 (없으면 저장소 루트 .env 에서 읽음, 값은 출력하지 않음)
   GATEWAY_API_KEY, ADMIN_API_KEY, BOT_BASE_URL (기본 http://localhost:8000)

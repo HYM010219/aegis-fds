@@ -112,7 +112,7 @@ function fromEngineCase(c, origin, s) {
   const t = Date.parse(c.detected_at);
   const items = {
     L1: [{ label: "1단계 보류 횟수 (새 보류만)", value: e.hold_count, threshold: T.L1_MIN_HOLDS, unit: "회", op: ">=" }],
-    L2: [{ label: "누적 송금액", value: e.day_total, threshold: T.L2_DAY_SUM, unit: "USDT", op: ">=" }, { label: "가장 큰 1건 (5만 미만이어야 해당)", value: e.max_single, threshold: T.R05_WHALE_USDT, unit: "USDT", op: "<" }],
+    L2: [{ label: "누적 송금액", value: e.day_total, threshold: T.L2_DAY_SUM, unit: "USDT", op: ">=" }, { label: `가장 큰 1건 (${T.R05_WHALE_USDT.toLocaleString()} USDT 미만이어야 해당)`, value: e.max_single, threshold: T.R05_WHALE_USDT, unit: "USDT", op: "<" }],
     L3: [{ label: "900~990 USDT 송금 횟수", value: e.band_tx_count, threshold: T.L3_MIN_BAND, unit: "회", op: ">=" }],
     L4: [{ label: "받고 바로 다시 보낸 횟수", value: e.pass_through_count, threshold: T.L4_MIN, unit: "회", op: ">=" }],
     L5: [

@@ -47,7 +47,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_DB=aegis
       - PERIOD_PROFILE=demo
-      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-50000}
+      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-100000}
       - EVAL_ENABLED=${EVAL_ENABLED:-1}   # [EVAL] PoC 평가(봇 정답 → 룰별 성적표). 운영은 0, 뺄 때 이 줄 삭제
     ports:
       - "8000:8000"                # LAN에 열림 → 봇 PC가 접속
@@ -146,6 +146,7 @@ services:
       - MONGO_DB=aegis
       - REDIS_HOST=redis
       - PERIOD_PROFILE=demo        # demo: 20분/5분/1분, prod: 2주/24시간/1시간
+      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-100000}
       - CHECKPOINT_DIR=/checkpoints/detector
       - STARTING_OFFSETS=latest    # 첫 시작 때 과거 메시지로 동결하지 않도록 새 메시지부터 읽음
       - L1_HOLD_SIDE=${L1_HOLD_SIDE:-sender}   # L1 보류 집계: sender(기본, 보낸 쪽 보류만) / all

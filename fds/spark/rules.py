@@ -4,7 +4,7 @@ Mongo·Redis를 직접 부르지 않아서, 가짜 거래 목록만 넣어도 �
 (L8만 2·3번째 거래를 더 찾아야 해서 조회 함수를 인자로 받는다)
 
     L1 반복 보류        2주 안에 1단계 보류 3회 이상                       자동 동결
-    L2 쪼개서 대량 송금 하루 누적 5만 이상, 모든 거래는 5만 미만            자동 동결
+    L2 쪼개서 대량 송금 하루 누적 10만 이상, 모든 거래는 10만 미만          자동 동결
     L3 장기 쪼개기      2주 안에 900~990 송금 10회 이상                    자동 동결
     L4 경유 지갑        받은 금액 80% 이상을 1시간 안에 송금, 2주 3회 이상  직원 검토
     L5 위험 지갑 접촉   블랙리스트·동결 지갑과 거래 (CRITICAL/HIGH/MEDIUM)   직원 검토
@@ -120,7 +120,7 @@ def l2_l3_l6(sent_rows, now, history=None):
 
 
 def l2(row, now):
-    """L2 쪼개서 대량 송금 (R05 회피): 하루 누적은 5만 이상인데 한 건도 5만을 넘지 않음."""
+    """L2: 누적은 공통 기준(기본 10만) 이상, 각 거래는 같은 기준 미만."""
     if row["day_sum"] >= L2_MIN_DAY_SUM and row["day_max"] < L2_MIN_DAY_SUM:
         return make_alert("L2", row["_id"], row["day_hashes"], row["day_first"], row["day_last"], {
             "day_sum": row["day_sum"], "day_max": row["day_max"], "day_count": row["day_count"],

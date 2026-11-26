@@ -28,7 +28,7 @@ export const R_RULES = {
 /* 2단계 Spark (최근 2주) — 조치: AUTO = 자동 동결, REVIEW = 검토 대기 */
 export const L_RULES = {
   L1: { name: "반복 보류", plain: `${LONG_LABEL} 안에 1단계 보류 ${T.L1_MIN_HOLDS}회 이상`, action: "AUTO", grade: "HIGH" },
-  L2: { name: "쪼개서 대량 송금", plain: `${DAY_LABEL} 누적 ${T.L2_DAY_SUM.toLocaleString()} 이상, 한 건은 모두 5만 미만`, action: "AUTO", grade: "HIGH" },
+  L2: { name: "쪼개서 대량 송금", plain: `${DAY_LABEL} 누적 ${T.L2_DAY_SUM.toLocaleString()} 이상, 한 건은 모두 ${T.R05_WHALE_USDT.toLocaleString()} USDT 미만`, action: "AUTO", grade: "HIGH" },
   L3: { name: "장기 쪼개기", plain: `${LONG_LABEL} 안에 900~990 송금 ${T.L3_MIN_BAND}회 이상`, action: "AUTO", grade: "HIGH" },
   L4: { name: "경유 지갑", plain: `1,000 이상 받고 ${PASS_LABEL} 안에 80% 이상 다시 보냄, ${T.L4_MIN}회`, action: "REVIEW", grade: "MEDIUM" },
   L5: { name: "위험 지갑 접촉", plain: "제재 지갑과 돈을 주고받음 / 동결 지갑과 거래", action: "REVIEW", grade: "by-type" },

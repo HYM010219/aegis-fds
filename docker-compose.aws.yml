@@ -62,6 +62,7 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_DB=aegis
       - PERIOD_PROFILE=${PERIOD_PROFILE:-demo}
+      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-100000}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -146,6 +147,7 @@ services:
       - MONGO_DB=aegis
       - REDIS_HOST=redis
       - PERIOD_PROFILE=${PERIOD_PROFILE:-demo}
+      - R05_LIMIT_USDT=${R05_LIMIT_USDT:-100000}
       - CHECKPOINT_DIR=/checkpoints/detector
       - STARTING_OFFSETS=latest
     volumes:

@@ -26,6 +26,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Optional local mixed-demo accounting; disabled outside bots/stream_all.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bots.rate_control import record_real_ingress
+
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -173,7 +177,9 @@ class Collector:
             "timestamp": iso(utc_now()),
         }
         try:
-            return self.http.post(self.fastapi_url, json=payload, headers=headers, timeout=5).status_code
+            status = self.http.post(self.fastapi_url, json=payload, headers=headers, timeout=5).status_code
+            record_real_ingress(status)
+            return status
         except Exception:
             return 0
 

@@ -41,8 +41,8 @@ def whitelist_key(rule_id):
 # R05 대량 송금 기준 (USDT). L2(쪼개서 대량 송금)는 R05를 피하는 패턴이라 같은 값을 기준으로 쓴다.
 import os
 
-# R05 대량 송금 전용 기준 (USDT). 환경 변수로 게이트웨이 R05만 독립 변경 가능 (기본 5만, 실험 시 10만)
-R05_LIMIT_USDT = int(os.getenv("R05_LIMIT_USDT", "50000"))
-
-# L2(쪼개서 대량 송금) 등 공통 기준 (USDT). R05를 10만으로 올려도 L2는 5만 유지
-WHALE_LIMIT_USDT = 50_000
+# R05 단건 기준과 L2 누적/건별 상한은 반드시 같은 값을 사용한다 (기본 10만).
+WHALE_LIMIT_USDT = int(os.getenv("R05_LIMIT_USDT", "100000"))
+if WHALE_LIMIT_USDT <= 0:
+    raise ValueError("R05_LIMIT_USDT must be positive")
+R05_LIMIT_USDT = WHALE_LIMIT_USDT

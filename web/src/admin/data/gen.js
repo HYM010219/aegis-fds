@@ -83,7 +83,7 @@ export function createGenerator(db, seed = 20261116) {
       const at = [t - rand(15, 18) * MIN, t - rand(8, 11) * MIN, t - rand(0.4, 1.5) * MIN];
       const hashes = [];
       rules.forEach((rule, i) => {
-        const amt = rule === "R02" ? rand(900, 990) : rule === "R05" ? rand(50000, 62000) : rand(300, 2500);
+        const amt = rule === "R02" ? rand(900, 990) : rule === "R05" ? rand(T.R05_WHALE_USDT, T.R05_WHALE_USDT * 1.24) : rand(300, 2500);
         const r = rejected(w, wallet("MAINNET"), amt, at[i], 429, `TEMP_HOLD_${rule}`);
         hold(w, rule, at[i], r);
         hashes.push(r.tx_hash);
@@ -99,17 +99,17 @@ export function createGenerator(db, seed = 20261116) {
     L2(t) {
       const w = wallet(R() < 0.6 ? "MAINNET" : "SIM");
       background(w, t);
-      const amts = [rand(18000, 21000), rand(17000, 20000), rand(12000, 16000)];
+      const amts = [rand(T.L2_DAY_SUM * 0.4, T.L2_DAY_SUM * 0.45), rand(T.L2_DAY_SUM * 0.35, T.L2_DAY_SUM * 0.4), rand(T.L2_DAY_SUM * 0.3, T.L2_DAY_SUM * 0.35)];
       const tos = [wallet("MAINNET"), wallet("MAINNET"), wallet("SIM")];
       const ts = [t - 4.2 * MIN, t - 2.6 * MIN, t - 0.3 * MIN];
       const txs = amts.map((a, i) => tx(w, tos[i], a, ts[i]));
       const sum = txs.reduce((s, x) => s + x.amount, 0);
       return newCase("L2", w, t, {
         tx_hashes: txs.map((x) => x.tx_hash), counterpart: "3곳", amount: sum,
-        headline: `5만 미만으로 나눠 ${txs.length}번 보내 누적 ${Math.round(sum).toLocaleString()} USDT가 되었습니다.`,
+        headline: `${T.R05_WHALE_USDT.toLocaleString()} USDT 미만으로 나눠 ${txs.length}번 보내 누적 ${Math.round(sum).toLocaleString()} USDT가 되었습니다.`,
         evidence: [
           { label: `${P === T.PERIODS.demo ? "5분" : "24시간"} 누적 송금액`, value: sum, threshold: T.L2_DAY_SUM, unit: "USDT", op: ">=" },
-          { label: "가장 큰 1건 (5만 미만이어야 해당)", value: Math.max(...amts), threshold: T.R05_WHALE_USDT, unit: "USDT", op: "<" },
+          { label: `가장 큰 1건 (${T.R05_WHALE_USDT.toLocaleString()} USDT 미만이어야 해당)`, value: Math.max(...amts), threshold: T.R05_WHALE_USDT, unit: "USDT", op: "<" },
         ],
       });
     },
@@ -248,7 +248,7 @@ export function createGenerator(db, seed = 20261116) {
   function makeHold(t) {
     const rule = pick(["R01", "R01", "R01", "R02", "R02", "R03", "R04", "R04", "R05", "R06", "R06"]);
     const w = wallet(R() < 0.9 ? "MAINNET" : "APP");
-    const amt = rule === "R02" ? rand(900, 990) : rule === "R05" ? rand(50000, 90000) : rand(100, 4000);
+    const amt = rule === "R02" ? rand(900, 990) : rule === "R05" ? rand(T.R05_WHALE_USDT, T.R05_WHALE_USDT * 1.8) : rand(100, 4000);
     const r = ["R03", "R06"].includes(rule)
       ? tx(wallet("MAINNET"), w, amt, t) // 거래는 통과, 상대(받은 쪽/먼저 보낸 쪽) 지갑을 보류
       : rejected(w, wallet("MAINNET"), amt, t, 429, `TEMP_HOLD_${rule}`);

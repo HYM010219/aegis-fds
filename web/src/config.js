@@ -4,6 +4,7 @@
    - 백엔드 연결 시 .env.local 에 VITE_API_BASE 지정 (예: "/" 또는 "http://localhost:8000")
    ========================================================== */
 const apiBase = (import.meta.env.VITE_API_BASE || "").trim();
+const whaleLimitUsdt = Number(import.meta.env.VITE_R05_LIMIT_USDT || 100000);
 
 export const CONFIG = {
   API_BASE: apiBase === "/" ? window.location.origin : apiBase,
@@ -38,7 +39,7 @@ export const CONFIG = {
     R02_MIN_BAND: 3,             // 쪼개기: 밴드 송금 3회 이상
     R03_MIN_SENDERS: 5,          // 집금: 서로 다른 보낸 지갑 5개 이상 → 받는 지갑 보류
     R04_MIN_RECEIVERS: 5,        // 분산: 서로 다른 받는 지갑 5개 이상
-    R05_WHALE_USDT: 50000,       // 대량 송금: 1건 50,000 이상 → 거래 거절 + 보류
+    R05_WHALE_USDT: whaleLimitUsdt, // R05와 L2가 공유하는 기준 (기본 100,000 USDT)
     IDEMPOTENCY_WINDOW_MS: 10 * 1000,
 
     // 2단계: Spark 장기 분석 (걸리면 동결 → HTTP 403 FROZEN_L1~L8)
@@ -49,7 +50,7 @@ export const CONFIG = {
     },
     ANALYZE_MS: 10 * 1000,       // ② 일반 거래 지갑 분석 주기
     L1_MIN_HOLDS: 3,
-    L2_DAY_SUM: 50000,
+    L2_DAY_SUM: whaleLimitUsdt,
     L3_MIN_BAND: 10,
     L4_RATIO: 0.8, L4_MIN: 3, L4_MIN_IN: 1000,   // v8.0: 1,000 이상 받고 80% 재송금 3회
     L5_MIN: 5,                   // (구버전 시연 시나리오용)

@@ -25,7 +25,7 @@ PERIOD = PROFILES[PROFILE_NAME]
 # L1 반복 보류
 L1_MIN_HOLDS = 3              # 2주 안에 1단계 보류 3회 이상
 # L2 쪼개서 대량 송금 (R05 회피)
-L2_MIN_DAY_SUM = WHALE_LIMIT_USDT  # 하루 누적 송금이 R05 기준(5만) 이상, 모든 거래는 5만 미만
+L2_MIN_DAY_SUM = WHALE_LIMIT_USDT  # R05와 동일 기준: 기본 누적 10만 이상, 각 거래 10만 미만
 # L3 장기 쪼개기 (R02 회피)
 L3_MIN_SPLITS = 10            # 2주 안에 900~990 송금 10회 이상
 SPLIT_MIN, SPLIT_MAX = 900, 990

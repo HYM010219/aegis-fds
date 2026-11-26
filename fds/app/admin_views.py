@@ -249,8 +249,8 @@ TRANSFER_FIELDS = {
     "_id": 0, "tx_hash": 1, "log_index": 1, "from": 1, "to": 1, "amount": 1, "block": 1,
     "http_code": 1, "status": 1, "reason": 1, "created_at": 1,
 }
-# FE ORIGINS 의 source 값 (meta.js). 시뮬레이터·고객 앱 구분은 아직 원장에 없다 → 모두 "온체인"
-ORIGIN_SOURCE = {"MAINNET": "온체인", "EXCHANGE": "온체인", "SDN": "온체인"}
+# FE ORIGINS 의 source 값 (meta.js).
+ORIGIN_SOURCE = {"MAINNET": "온체인", "EXCHANGE": "온체인", "SDN": "온체인", "SIM": "모의", "APP": "앱"}
 RULE_IN_REASON = re.compile(r"\b(?:TEMP_HOLD_|FROZEN_)?(R0[1-7]|L[1-8])\b")
 
 
@@ -297,9 +297,14 @@ def _result(doc, holds):
 
 
 async def _origins(addresses):
-    """거래소(화이트리스트 L) → EXCHANGE, 블랙리스트 → SDN, 나머지 → MAINNET."""
+    """시뮬레이터(BOT-, wal_) → SIM, 거래소(화이트리스트 L) → EXCHANGE, 블랙리스트 → SDN, 나머지 → MAINNET."""
     addresses = list(addresses)
-    out = dict.fromkeys(addresses, "MAINNET")
+    out = {}
+    for a in addresses:
+        if a and (a.startswith("BOT-") or a.startswith("bot-") or a.startswith("wal_")):
+            out[a] = "SIM"
+        else:
+            out[a] = "MAINNET"
     if not addresses:
         return out
     try:
@@ -648,8 +653,8 @@ def _evidence(rule, e, c):
                 f"{rules[0]} 등 보류 {e.get('hold_count', 0)}회" if rules else None)
     if rule == "L2":
         return ([_ev(f"{p['day']} 누적 송금액", e.get("day_sum"), th("min_day_sum", WHALE_LIMIT_USDT), "USDT"),
-                 _ev("가장 큰 1건 (5만 미만이어야 해당)", e.get("day_max"), th("each_below", WHALE_LIMIT_USDT), "USDT", "<")],
-                f"{p['day']} 동안 {e.get('day_count', 0)}건으로 나눠 {e.get('day_sum', 0):,.0f} USDT를 보냈고, 한 건도 5만을 넘지 않았습니다.",
+                 _ev(f"가장 큰 1건 ({th('each_below', WHALE_LIMIT_USDT):,.0f} USDT 미만이어야 해당)", e.get("day_max"), th("each_below", WHALE_LIMIT_USDT), "USDT", "<")],
+                f"{p['day']} 동안 {e.get('day_count', 0)}건으로 나눠 {e.get('day_sum', 0):,.0f} USDT를 보냈고, 각 건은 {th('each_below', WHALE_LIMIT_USDT):,.0f} USDT 미만입니다.",
                 f"{e.get('day_count', 0)}건 분할")
     if rule == "L3":
         return ([_ev("900~990 USDT 송금 횟수", e.get("split_count"), th("min_count", L3_MIN_SPLITS), "회")],

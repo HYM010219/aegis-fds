@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
+from bots.rate_control import record_real_ingress
 
 def parse_iso(ts_str: str) -> datetime:
     return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -33,11 +34,14 @@ def get_gateway_key(base_dir: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Replay golden on-chain dataset at 1x speed with salted hashes.")
     parser.add_argument("--round-prefix", "-r", type=str, default="A", help="Replay round prefix (e.g. A, B)")
-    parser.add_argument("--golden-file", "-f", type=str, default="data/onchain/golden_r3_30min.jsonl", help="Golden dataset JSONL")
+    parser.add_argument("--input", "--golden-file", "-f", dest="golden_file", type=str, default="data/onchain/golden_r3_30min.jsonl", help="Collector JSONL recording (absolute path or relative to repository)")
     parser.add_argument("--gateway-url", "-u", type=str, default="http://localhost:8000/api/v1/transfers", help="FastAPI transfers endpoint")
     parser.add_argument("--speed", "-s", type=float, default=1.0, help="Playback speed multiplier (1.0 = real-time)")
     parser.add_argument("--min-amount", type=float, default=0.01, help="Minimum amount to send (default 0.01 USDT)")
+    parser.add_argument("--inspect-only", action="store_true", help="Validate and summarize input without API requests")
     args = parser.parse_args()
+    if args.speed <= 0:
+        parser.error("--speed must be positive")
 
     base_dir = Path(__file__).resolve().parent
     golden_path = base_dir / args.golden_file
@@ -53,8 +57,9 @@ def main():
     # T0 파일 기록
     t0_epoch_ms = int(time.time() * 1000)
     t0_file = base_dir / f".retest_t0_replay_{args.round_prefix.lower()}"
-    with open(t0_file, "w", encoding="utf-8") as f:
-        f.write(str(t0_epoch_ms))
+    if not args.inspect_only:
+        with open(t0_file, "w", encoding="utf-8") as f:
+            f.write(str(t0_epoch_ms))
 
     t0_dt_kst = datetime.fromtimestamp(t0_epoch_ms / 1000.0, timezone.utc).astimezone()
     print("=" * 70)
@@ -92,6 +97,9 @@ def main():
     total_data_seconds = (last_collected_at - first_collected_at).total_seconds()
     print(f"[*] 데이터셋 시간 범위: {records[0]['collected_at']} ~ {records[-1]['collected_at']} ({total_data_seconds:.1f}초, 약 {total_data_seconds / 60:.1f}분)")
     print(f"[*] 예상 리플레이 소요 시간: {total_data_seconds / args.speed:.1f}초 (약 {(total_data_seconds / args.speed) / 60:.1f}분)", flush=True)
+    if args.inspect_only:
+        print("[검사 완료] API 전송 없이 종료합니다.", flush=True)
+        return
 
     session = requests.Session()
     stats = {
@@ -138,6 +146,7 @@ def main():
         try:
             resp = session.post(args.gateway_url, json=payload, headers=headers, timeout=5)
             status = resp.status_code
+            record_real_ingress(status)
             stats["sent"] += 1
             if status in (200, 201):
                 stats["200"] += 1

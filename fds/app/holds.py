@@ -4,7 +4,7 @@
     R02 쪼개기     5분 안에 900~990 USDT 송금 3회 이상   → 보내는 지갑 보류, 거래 거절
     R03 집금       5분 안에 서로 다른 5개 지갑에게서 받음 → 받는 지갑 보류, 거래는 통과
     R04 분산       5분 안에 서로 다른 5개 지갑에게 보냄  → 보내는 지갑 보류, 거래 거절
-    R05 대량 송금  한 번에 50,000 USDT 이상              → 보내는 지갑 보류, 거래 거절
+    R05 대량 송금  한 번에 100,000 USDT 이상             → 보내는 지갑 보류, 거래 거절
     R06 핑퐁       A→B 뒤 5분 안에 B→A                   → 받는 지갑(A) 보류, 거래는 통과
 
 R01~R04·R06은 지갑별 최근 5분 기록이 필요해서 Redis Lua 하나로 계산한다 (동시 요청에도 개수가 꼬이지 않음).
@@ -31,7 +31,7 @@ R02_MIN_SPLITS = 3              # R02 쪼개기: 900~990 USDT 송금 3회 이상
 R02_MIN, R02_MAX = 900, 990
 R03_MIN_SENDERS = 5             # R03 집금: 서로 다른 보낸 지갑 5개 이상
 R04_MIN_RECEIVERS = 5           # R04 분산: 서로 다른 받는 지갑 5개 이상
-WHALE_LIMIT = Decimal(R05_LIMIT_USDT)  # R05 대량 송금: 5만 이상 (금액 비교는 Decimal로)
+WHALE_LIMIT = Decimal(R05_LIMIT_USDT)  # R05/L2 공통 기준, 기본 10만 (Decimal 비교)
 # R06 핑퐁은 기준 숫자 없음 (5분 안에 되돌려 보냈는지만 본다)
 
 # Lua 안에서 화이트리스트를 확인하는 룰 (R05는 Lua 밖에서 확인)
@@ -196,7 +196,7 @@ async def evaluate(r: redis.Redis, req, amount, now_ms: int) -> Decision:
 
 
 async def _check_r05(r: redis.Redis, req, amount) -> Decision | None:
-    """R05 대량 송금: 5만 이상이면 거래를 거절하고 보내는 지갑을 보류한다. 해당 없으면 None."""
+    """R05: 공통 기준(기본 10만) 이상이면 거절하고 보내는 지갑을 보류한다."""
     if amount < WHALE_LIMIT or await is_whitelisted(r, "R05", req.from_address):
         return None
     if await hold_sender(r, req.from_address, "R05"):

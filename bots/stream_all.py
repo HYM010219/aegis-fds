@@ -1,82 +1,119 @@
 #!/usr/bin/env python3
-"""
-실데이터 + 이상거래 봇을 동시에 계속 흘리기 (Aegis-FDS 시연·측정용)
+"""Real ingress + bots at approximately 2:1. Use --live or a golden recording.
 
-- 실데이터: 기본은 메인넷 녹화본(골든 30분)을 끝까지 재생한 뒤 이름을 바꿔 다시 재생 (반복)
-           --live 를 주면 녹화본 대신 실시간 수집기(collector_alchemy.py)를 켠다
-- 봇: bots/run_bots.py --continuous (BOT- 지갑, 각 3회 보장 후 60:40)
-- Ctrl+C 한 번으로 둘 다 멈춘다
-
-사용법 (저장소 맨 위 폴더에서)
-  python bots/stream_all.py                      # 녹화본 1배속 반복 + 봇
-  python bots/stream_all.py --real-speed 0.5     # 녹화본 0.5배속
-  python bots/stream_all.py --live               # 실시간 수집기 + 봇 (ALCHEMY_WSS_URL 필요)
-  python bots/stream_all.py --bot-slow 2 --round-gap 30
-
-주의: 시작 전에 면제 12곳 등록(seed_whitelist.py)과 화면 백엔드 연결을 확인한다.
+The live mode starts its own collector: keep the Kubernetes collector stopped.
 """
 import argparse
+import csv
+import json
+import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from run_bots import ALL, load_env
 
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
 
-def start_real(a, n):
-    if a.live:
-        return subprocess.Popen([PY, "collector/collector_alchemy.py"], cwd=ROOT)
-    # 같은 이름으로 다시 재생하면 중복으로 막히므로 회차마다 이름을 바꾼다
-    return subprocess.Popen([PY, "replay_golden.py", "-r", f"{a.prefix}{n}", "-s", str(a.real_speed)], cwd=ROOT)
+def read_count(path, key):
+    try:
+        return json.loads(path.read_text(encoding='utf-8')).get(key, 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def start_real(args, number, env):
+    if args.live:
+        return subprocess.Popen([PY, 'collector/collector_alchemy.py', '--record', str(args.record_dir)], cwd=ROOT, env=env)
+    return subprocess.Popen([PY, 'replay_golden.py', '-r', f'{args.prefix}{number}',
+        '-s', str(args.real_speed), '--input', str(args.input), '--gateway-url', env['FASTAPI_URL']], cwd=ROOT, env=env)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="실데이터 + 봇 동시 주입")
-    ap.add_argument("--live", action="store_true", help="녹화본 대신 실시간 수집기")
-    ap.add_argument("--real-speed", type=float, default=1.0, help="녹화본 재생 배속 (기본 1.0)")
-    ap.add_argument("--prefix", default="LOOP", help="녹화본 회차 이름 앞부분 (기본 LOOP → LOOP1, LOOP2 …)")
-    ap.add_argument("--bot-slow", type=float, default=2.0, help="봇 거래 간격 배수 (기본 2.0)")
-    ap.add_argument("--round-gap", type=float, default=30, help="봇 회차 사이 쉬는 초")
-    a = ap.parse_args()
-
-    if not a.live and not (ROOT / "replay_golden.py").exists():
-        sys.exit("replay_golden.py 가 저장소 맨 위에 없습니다")
-    if not a.live and not (ROOT / "data/onchain/golden_r3_30min.jsonl").exists():
-        sys.exit("data/onchain/golden_r3_30min.jsonl 이 없습니다")
-
-    n = 1
-    real = start_real(a, n)
-    bots = subprocess.Popen([PY, "bots/run_bots.py", "--continuous",
-                             "--slow", str(a.bot_slow), "--round-gap", str(a.round_gap)], cwd=ROOT)
-    print(f"[시작] 실데이터={'실시간 수집기' if a.live else f'녹화본 {a.prefix}{n}'} · 봇 연속 모드 (Ctrl+C로 중지)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--live', action='store_true')
+    parser.add_argument('--real-speed', type=float, default=1)
+    parser.add_argument('--prefix', default='LOOP')
+    parser.add_argument('--input', type=Path, default=ROOT/'data/onchain/golden_r3_30min.jsonl', help='Replay JSONL file, including an AWS collector recording')
+    parser.add_argument('--bot-ratio', type=float, default=.5, help='bot / real ingress target')
+    parser.add_argument('--only', nargs='+', choices=ALL, default=['L2','L6','L7','L8','BOT2_HOT'])
+    parser.add_argument('--record-dir', type=Path, default=ROOT/'data/onchain')
+    args = parser.parse_args()
+    if not 0 < args.bot_ratio <= 1 or args.real_speed <= 0:
+        parser.error('require 0 < bot-ratio <= 1 and real-speed > 0')
+    args.input = args.input.resolve()
+    if not args.live and not args.input.is_file():
+        parser.error(f'missing replay input: {args.input}; supply --input or use --live')
+    cfg = load_env()
+    if not cfg['gw_key'] or not cfg['admin_key']:
+        parser.error('GATEWAY_API_KEY / ADMIN_API_KEY required in environment or .env')
+    env = dict(os.environ)
+    dotenv = ROOT/'.env'
+    if dotenv.exists():
+        for line in dotenv.read_text(encoding='utf-8-sig').splitlines():
+            if '=' in line and not line.lstrip().startswith('#'):
+                key, value = line.split('=', 1)
+                env.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    if args.live and (not env.get('ALCHEMY_WSS_URL') or 'CHANGE_ME' in env['ALCHEMY_WSS_URL']):
+        parser.error('set a valid ALCHEMY_WSS_URL before --live')
+    out = ROOT/'bot_runs'
+    out.mkdir(exist_ok=True)
+    run = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + f'-{os.getpid()}'
+    state = out/f'mix-{run}.json'
+    state.write_text(json.dumps({'real_count':0, 'updated_at':0}), encoding='utf-8')
+    env.update(MIX_RATE_STATE=str(state), MIX_BOT_RATIO=str(args.bot_ratio),
+        GATEWAY_API_KEY=cfg['gw_key'], ADMIN_API_KEY=cfg['admin_key'],
+        FASTAPI_URL=cfg['base']+'/api/v1/transfers', BOT_BASE_URL=cfg['base'])
+    number = 1
+    real = bots = None
+    csv_path = out/f'mix-{run}.csv'
+    bot_state = state.with_name(state.name+'.bot.json')
     try:
-        while True:
-            time.sleep(5)
-            if bots.poll() is not None:
-                print(f"[봇 종료됨 code={bots.returncode}] 다시 시작")
-                bots = subprocess.Popen([PY, "bots/run_bots.py", "--continuous",
-                                         "--slow", str(a.bot_slow), "--round-gap", str(a.round_gap)], cwd=ROOT)
-            if real.poll() is not None:
-                if a.live:
-                    print(f"[수집기 종료됨 code={real.returncode}] 5초 뒤 다시 시작")
-                else:
-                    n += 1
-                    print(f"[녹화본 끝] 다음 회차 {a.prefix}{n} 재생")
-                real = start_real(a, n)
+        bots = subprocess.Popen([PY, 'bots/run_bots.py', '--continuous', '--paced',
+            '--round-gap', '0', '--only', *args.only], cwd=ROOT, env=env)
+        real = start_real(args, number, env)
+        print(f'[mix] bot/real target={args.bot_ratio:.2f}; real ingress pause => bots pause', flush=True)
+        previous = (0, 0)
+        last = time.monotonic()
+        with csv_path.open('w', newline='', encoding='utf-8') as target:
+            writer = csv.writer(target)
+            writer.writerow(['at_utc','real_total','bot_permits','real_tps','bot_tps','bot_real_ratio'])
+            while True:
+                time.sleep(10)
+                if bots.poll() is not None:
+                    raise RuntimeError(f'bot stopped: code={bots.returncode}; fix before restarting mix')
+                if real.poll() is not None:
+                    if args.live or real.returncode != 0:
+                        raise RuntimeError(f'real producer stopped: code={real.returncode}')
+                    number += 1
+                    real = start_real(args, number, env)
+                now = time.monotonic()
+                counts = (read_count(state, 'real_count'), read_count(bot_state, 'bot_count'))
+                r, b = ((counts[i]-previous[i])/(now-last) for i in range(2))
+                ratio = b/r if r else None
+                writer.writerow([datetime.now(timezone.utc).isoformat(), *counts,
+                    round(r,3), round(b,3), round(ratio,3) if ratio is not None else ''])
+                target.flush()
+                print(f'[mix] real={r:.2f}/s bot={b:.2f}/s bot/real={ratio if ratio is not None else "paused"}; totals={counts}', flush=True)
+                previous, last = counts, now
     except KeyboardInterrupt:
-        print("\n[중지 중] 실데이터·봇 종료")
-        for p in (real, bots):
-            if p.poll() is None:
-                p.terminate()
-        for p in (real, bots):
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                p.kill()
-        print("[중지 완료] 봇 기록: bot_runs/bots.csv")
+        print('\n[mix] stopping producers', flush=True)
+    finally:
+        for process in (real, bots):
+            if process is not None and process.poll() is None:
+                process.terminate()
+        for process in (real, bots):
+            if process is not None:
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        print(f'[mix] measurements: {csv_path}', flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

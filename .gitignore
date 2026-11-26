@@ -17,6 +17,12 @@ __pycache__/
 *.pyc
 logs/
 data/onchain/
+.local/
+backups/
+bot_runs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # 에디터 / OS
 .idea/
@@ -32,7 +38,5 @@ analyze_*.py
 measure_*.ps1
 patch_*.diff
 run_*.py
-!bots/run_bots.py
 test_*.py
-bot_runs/
 

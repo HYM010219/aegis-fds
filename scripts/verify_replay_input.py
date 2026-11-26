@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-spec = importlib.util.spec_from_file_location('replay', ROOT/'replay_golden.py')
+spec = importlib.util.spec_from_file_location('replay', ROOT/'bots/replay_golden.py')
 replay = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(replay)
 

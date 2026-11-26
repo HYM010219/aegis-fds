@@ -15,12 +15,13 @@ Spark 재계산·STR 구현(`14be4af`)에 봇을 주입한 로컬 검증 기록�
 ```bash
 python bots/run_bots.py --dry-run --only L2 L6 L7
 python bots/run_bots.py --once --only L2 L6 L7
+python bots/replay_golden.py --inspect-only   # 기본 입력: bots/golden_r3_30min.jsonl (없으면 data/onchain/golden_r3_30min.jsonl)
 python bots/replay_golden.py --input data/onchain/usdt_20261124.jsonl --inspect-only
 python bots/seed_whitelist.py bots/whitelist_seed.csv --dry-run
 python bots/stream_all.py --input data/onchain/usdt_20261124.jsonl --bot-ratio 1.0
 ```
 
-송신 명령은 테스트용 Gateway와 관리자 API에 연결한다. 실제 자산 이동·온체인 출금 차단을 수행하는 것이 아니다. 녹화 JSONL, DB, `.env`, 실행 로그는 Git에 포함하지 않는다. AWS 녹화본을 사용하려면 별도 백업에서 입력 파일을 복사해야 한다.
+송신 명령은 테스트용 Gateway와 관리자 API에 연결한다. 실제 자산 이동·온체인 출금 차단을 수행하는 것이 아니다. 시연용 golden 녹화본(공개 온체인 데이터, 약 10MB)만 bots/에 포함한다. 그 밖의 녹화 JSONL, DB, `.env`, 실행 로그는 Git에 포함하지 않는다. AWS 녹화본을 사용하려면 별도 백업에서 입력 파일을 복사해야 한다.
 
 실행한 오프라인 검사:
 

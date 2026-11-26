@@ -24,6 +24,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from bots.rate_control import record_real_ingress
 
+# --input을 주지 않으면 이 순서로 찾는다 (저장소 루트 기준)
+DEFAULT_INPUTS = ("bots/golden_r3_30min.jsonl", "data/onchain/golden_r3_30min.jsonl")
+
 def parse_iso(ts_str: str) -> datetime:
     return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
 
@@ -40,7 +43,7 @@ def get_gateway_key(base_dir: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Replay golden on-chain dataset at 1x speed with salted hashes.")
     parser.add_argument("--round-prefix", "-r", type=str, default="A", help="Replay round prefix (e.g. A, B)")
-    parser.add_argument("--input", "--golden-file", "-f", dest="golden_file", type=str, default="data/onchain/golden_r3_30min.jsonl", help="Collector JSONL recording (absolute path or relative to repository)")
+    parser.add_argument("--input", "--golden-file", "-f", dest="golden_file", type=str, default=None, help="Collector JSONL recording (absolute path or relative to repository). Default: bots/golden_r3_30min.jsonl, then data/onchain/golden_r3_30min.jsonl")
     parser.add_argument("--gateway-url", "-u", type=str, default="http://localhost:8000/api/v1/transfers", help="FastAPI transfers endpoint")
     parser.add_argument("--speed", "-s", type=float, default=1.0, help="Playback speed multiplier (1.0 = real-time)")
     parser.add_argument("--min-amount", type=float, default=0.01, help="Minimum amount to send (default 0.01 USDT)")
@@ -50,7 +53,11 @@ def main():
         parser.error("--speed must be positive")
 
     base_dir = ROOT
-    golden_path = base_dir / args.golden_file
+    if args.golden_file:
+        golden_path = base_dir / args.golden_file
+    else:
+        candidates = [base_dir / p for p in DEFAULT_INPUTS]
+        golden_path = next((p for p in candidates if p.exists()), candidates[0])
     if not golden_path.exists():
         print(f"[ERROR] 골든 데이터셋 파일을 찾을 수 없습니다: {golden_path}")
         sys.exit(1)

@@ -5,8 +5,10 @@
 
     - Kafka 전송이 실패해 배치가 다시 돌면, 이미 적어 둔 경보(PENDING)를 그대로 다시 보낸다.
       재분석 간격 때문에 같은 경보가 다시 계산되지 않아도 빠지지 않는다.
-    - alert_id = "배치 번호:룰:지갑". Spark는 실패한 배치를 같은 배치 번호로 다시 돌리므로
+    - alert_id = "실행 ID:배치 번호:룰:지갑". Spark는 실패한 배치를 같은 배치 번호로 다시 돌리므로
       다시 계산해도 같은 번호가 나와 두 줄로 저장되지 않는다 (_id가 alert_id).
+    - 실행 ID는 체크포인트마다 하나 (Spark 쿼리 id 앞 8자리, stream.py). 같은 체크포인트로 재시작하면 그대로이고,
+      체크포인트를 새로 잡으면 배치 번호가 0부터 다시 시작해도 실행 ID가 달라서 예전 경보 번호와 겹치지 않는다.
     - Kafka로 보낸 뒤 PUBLISHED로 바꾸기 전에 죽으면 같은 경보가 한 번 더 나간다.
       경보 소비자가 alert_id로 한 번만 반영한다 (app/alert_consumer.py).
     - 보낸 경보는 7일 뒤 자동 삭제. PENDING은 published_at이 없어서 지워지지 않는다.
@@ -32,22 +34,22 @@ def ensure_indexes(db):
     c.create_index("published_at", expireAfterSeconds=KEEP_SECONDS)
 
 
-def assign_ids(alerts, batch_id):
+def assign_ids(alerts, batch_id, run_id):
     """경보마다 alert_id를 붙인다. 한 배치에서 같은 룰·지갑이 두 번 나오면 뒤에 :1, :2를 붙인다."""
     count = defaultdict(int)
     for a in alerts:
-        base = f"{batch_id}:{a['rule_id']}:{a['violator_address']}"
+        base = f"{run_id}:{batch_id}:{a['rule_id']}:{a['violator_address']}"
         n = count[base]
         count[base] += 1
         a["alert_id"] = base if n == 0 else f"{base}:{n}"
 
 
-def save(db, alerts, batch_id):
+def save(db, alerts, batch_id, run_id):
     """경보를 PENDING으로 저장한다. 이미 있는 alert_id(같은 배치를 다시 돌린 경우)는 처음 저장한 것을 그대로 둔다.
     돌려주는 값: 새로 저장한 경보 수."""
     if not alerts:
         return 0
-    assign_ids(alerts, batch_id)
+    assign_ids(alerts, batch_id, run_id)
     now = datetime.now(timezone.utc)
     docs = [{
         "_id": a["alert_id"],
@@ -55,6 +57,7 @@ def save(db, alerts, batch_id):
         "rule_id": a["rule_id"],
         "payload": json.dumps(a, ensure_ascii=False),
         "status": "PENDING",
+        "run_id": run_id,
         "batch_id": batch_id,
         "created_at": now,
         "published_at": None,

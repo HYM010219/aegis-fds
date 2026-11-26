@@ -59,6 +59,24 @@ ticks = (
 )
 
 
+QUERY_NAME = "detector"
+_run_id = None
+
+
+def run_id():
+    """경보 번호 앞에 붙는 실행 ID (alert_outbox.py). Spark 쿼리 id 앞 8자리.
+    쿼리 id는 체크포인트 metadata 파일에 저장돼 같은 체크포인트로 재시작하면 그대로고, 체크포인트를 새로 잡으면 바뀐다."""
+    global _run_id
+    if _run_id is None:
+        qid = next((q.id for q in spark.streams.active if q.name == QUERY_NAME), None)
+        if qid is None:  # 혹시 목록에서 못 찾으면 체크포인트 파일에서 직접 읽는다
+            with open(os.path.join(CHECKPOINT.replace("file:", "", 1), "metadata"), encoding="utf-8") as f:
+                qid = json.load(f)["id"]
+        _run_id = qid.replace("-", "")[:8]
+        logger.info(f"경보 번호 실행 ID={_run_id} (쿼리 id {qid}, 체크포인트 {CHECKPOINT})")
+    return _run_id
+
+
 def process_batch(df, batch_id):
     started = time.time()
     rows = [(row.topic, row.value) for row in df.collect()]
@@ -70,7 +88,7 @@ def process_batch(df, batch_id):
         stats.update(crosscheck.attach(spark, detector.db, alerts, batch_id=batch_id))
 
     # 2-2) 보내기 전에 경보를 Mongo fds_alert_outbox에 적어 두고, 그다음 처리 표시
-    stats["saved"] = alert_outbox.save(detector.db, alerts, batch_id)
+    stats["saved"] = alert_outbox.save(detector.db, alerts, batch_id, run_id())
     stats.update(detector.mark_done(done))
 
     # 3) 아직 못 보낸 경보(이번 배치 + 지난번 실패분)를 fds.alerts.v1로 보낸다.
@@ -103,7 +121,7 @@ alert_outbox.ensure_indexes(detector.db)
 logger.info(f"detector 시작 profile={PROFILE_NAME} trigger={TRIGGER} topics={TRANSFER_TOPIC},{HOLD_TOPIC},{FREEZE_TOPIC}")
 (
     messages.unionByName(ticks)
-    .writeStream.queryName("detector")
+    .writeStream.queryName(QUERY_NAME)
     .foreachBatch(process_batch)
     .option("checkpointLocation", CHECKPOINT)
     .trigger(processingTime=TRIGGER)

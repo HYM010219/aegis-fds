@@ -84,6 +84,7 @@ async def ensure_indexes():
     await db.fds_cases.create_index("case_dedup_key", unique=True)
     await db.fds_cases.create_index([("violator_address", 1), ("detected_at", -1)])
     await db.fds_cases.create_index([("rule_id", 1), ("detected_at", -1)])
+    await db.fds_cases.create_index("alert_ids")  # Spark 재발행 경보 중복 확인 (alert_consumer.py)
 
     # 감사 원장: 동결·해제·이상 없음·목록 변경을 한 줄씩 쌓기만 한다 (자동 동결은 경보 소비자가 같은 형식으로)
     await db.policy_decisions.create_index("decision_id", unique=True)

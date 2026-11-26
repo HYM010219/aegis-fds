@@ -12,6 +12,7 @@
   └ 보류·차단 → Mongo fds_holds + outbox → Publisher → ② fds.holds.v1 ──┤
                                                                        ▼
                                Spark (2단계: 10초마다, Mongo 최근 2주 조회, L1~L8)
+                                                                       │ Mongo fds_alert_outbox에 먼저 저장
                                                                        │ ③ fds.alerts.v1
                                                                        ▼
                                                                   경보 소비자
@@ -35,15 +36,19 @@
 | `app/idempotency.py` | `aegis-gateway` | 중복 요청 확인 (Redis) |
 | `app/publisher.py` | `aegis-publisher` | `outbox_events`를 문서의 `topic`대로 Kafka에 전송 |
 | `app/alert_consumer.py` | `aegis-alert-consumer` | L1~L8 경보 → 케이스 저장, 자동 동결, 동결 이벤트 전송 |
-| `spark/stream.py` | `aegis-spark` | Kafka 토픽 3개 읽기, 경보 전송 |
-| `spark/detector.py` | `aegis-spark` | 배치 흐름: 계기 ①②③, 분석할 지갑 고르기, 제외 |
+| `spark/stream.py` | `aegis-spark` | Kafka 토픽 3개 읽기, 경보 저장 → 전송 순서 |
+| `spark/alert_outbox.py` | `aegis-spark` | 경보 전송 대기함 `fds_alert_outbox` (저장, 못 보낸 경보 다시 보내기) |
+| `spark/detector.py` | `aegis-spark` | 배치 흐름: 계기 ①②③, 분석할 지갑 고르기, 제외. 계산(`analyze`)과 처리 표시(`mark_done`)를 나눔 |
+| `spark/crosscheck.py` | `aegis-spark` | L2·L6·L7 경보의 원본 거래를 Spark로 다시 계산 (1분 내역, 5분 이동 윈도, 판정 값 대조) |
 | `spark/config.py` | `aegis-spark` | 기간 프로필(prod/demo), L1~L8 기준값, 처리량 제한 |
 | `spark/queries.py` | `aegis-spark` | Mongo 조회 (여러 지갑을 한 번에, L2·L3·L6과 L4·L8은 조회를 같이 씀) |
 | `spark/rules.py` | `aegis-spark` | L1~L8 판단 (조회 결과 → 경보, Mongo 없이 테스트 가능) |
 
 컨테이너 종류마다 폴더 하나에 `Dockerfile`과 `requirements.txt`를 함께 둔다.
 `app/`은 게이트웨이, Publisher, 경보 소비자가 같은 이미지를 쓰고, 실행 명령만 다르다.
-`common/`은 게이트웨이 이미지에 복사되고(빌드 위치 `fds/`), Spark에는 볼륨으로 연결된다.
+`common/`은 게이트웨이 이미지와 Spark 이미지에 복사된다 (둘 다 빌드 위치 `fds/`).
+Spark 이미지에는 `spark/`·`common/` 코드가 들어 있어 k3s는 이미지 그대로 실행하고, 로컬 compose는 같은 폴더를 볼륨으로 덮어써서 재시작만으로 코드가 반영된다.
+Spark 이미지에 넣을 파일은 `spark/Dockerfile.dockerignore`가 정한다 (`fds/.dockerignore`는 게이트웨이용).
 
 ## 1단계: 게이트웨이 검사 순서
 
@@ -130,6 +135,40 @@ L5 등급 (통과된 거래만 셈, R07로 막힌 시도는 제외):
 - 같은 룰 + 같은 지갑의 경보는 케이스 하나로 합친다. 거래 시각 기준 10분 넘게 끊기면 새 케이스. 동결 해제된 케이스에는 합치지 않는다.
 - 직원이 동결 해제한 지갑은 **해제 시각 이후 기록만** 다시 분석한다 (`fds:unfrozen_at`). 해제 전 거래로 바로 다시 동결되지 않게 하기 위해서다. L7의 '처음 보낸 상대'는 해제 전 기록까지 보고 판단하고, L6은 해제 후 이틀이 지나야 본다.
 
+### 경보 전송 (빠짐·중복 방지)
+
+게이트웨이 outbox와 같은 원리로, 경보를 Kafka로 보내기 전에 Mongo `fds_alert_outbox`에 먼저 적어 둔다.
+
+```text
+배치마다: 계산(analyze) → Spark 재계산 → fds_alert_outbox 저장(PENDING) → Redis 처리 표시(mark_done)
+          → 못 보낸 경보 전부(이번 배치 + 지난 실패분) fds.alerts.v1 전송 → PUBLISHED
+```
+
+| 상황 | 결과 |
+|---|---|
+| Kafka 전송 실패, Spark 재시작 | 저장해 둔 PENDING 경보를 다음 배치에서 다시 보낸다. 재분석 간격 때문에 같은 경보가 다시 계산되지 않아도 빠지지 않는다 |
+| 같은 배치를 다시 돌림 | 경보 번호 `alert_id` = `배치번호:룰:지갑`이 같아서 두 줄로 저장되지 않는다 |
+| 보낸 뒤 PUBLISHED 표시 전에 죽음 | 같은 경보가 한 번 더 나간다. 경보 소비자가 케이스의 `alert_ids`로 이미 반영한 번호를 알아보고 케이스는 건드리지 않는다 (동결 여부만 이어서 확인) |
+
+- 처리 표시(재분석 간격, 대기 목록 정리)는 경보를 저장한 **뒤에** 한다. 먼저 하면 전송 실패 뒤 다시 돌릴 때 재분석 간격에 막혀 경보가 사라진다.
+- 계기 ③의 '이미 본 동결·블랙리스트 주소' 표시도 L5 대기 목록에 넣은 뒤에 남긴다.
+- 보낸 경보는 7일 뒤 자동 삭제. PENDING은 지워지지 않는다.
+- 11/26 로컬 확인: 정상 흐름, 같은 경보 재발송, Spark 중지 중 쌓인 경보, Kafka 약 50초 중지 중 쌓인 경보 모두 케이스·감사 원장·동결이 하나씩만 남음.
+
+### Spark 재계산 (L2·L6·L7, `recompute`)
+
+판정은 바꾸지 않고, 경보 지갑의 원본 거래(`transfers` 승인 송금)를 Spark DataFrame으로 다시 계산해 근거로 붙인다. 케이스 `recompute`에 저장되고 케이스 상세·STR 초안 4-1이 보여 준다.
+
+| 항목 | 내용 |
+|---|---|
+| 판정 값 대조 | L2 누적·최대·건수, L6 오늘·평소, L7 처음 보낸 상대 → `MATCH` / `MISMATCH` |
+| 범위 요약 | 송금 횟수·합계·서로 다른 상대 수 |
+| 1분 내역 | 1분마다 건수·합계·최대·상대 수 (`minutes`) |
+| 5분 이동 윈도 | Spark `window(시각, "5 minutes", "1 minute")`로 5분 구간(1분 간격)마다 송금 횟수·금액·서로 다른 상대 수. 가장 많이 보낸 구간(`peak_count`), 상대가 가장 많았던 구간(`peak_receivers`), 최근 60개 구간 (`windows_5m`) |
+
+- 상시 스트리밍 집계(워터마크·상태 저장)가 아니라, 경보가 뜬 지갑만 경보 시점에 원본으로 계산한다. 모든 주소를 계속 집계하는 것보다 비용이 작고 판정 근거와 같은 범위를 본다.
+- 범위 안 거래만 세므로, 범위 처음·끝에 걸친 5분 구간은 일부 시간만 담긴다.
+
 ## 직원 API (관제 웹 백엔드용)
 
 관제 웹의 **백엔드 서버**가 부른다. 브라우저에서 바로 부르지 않는다. 헤더 `X-Admin-Key` 필요 (`.env`의 `ADMIN_API_KEY`, 송금 키와 다름). 키를 설정하지 않으면 503 `ADMIN_API_DISABLED`.
@@ -184,7 +223,8 @@ POST 본문에는 공통으로 `"operator": "직원ID"`, `"memo": "사유"`가 �
 | Mongo | `transfers` | 모든 요청 원본 (통과, 거절). 자동 삭제는 `TRANSFERS_TTL_DAYS`로 켬 (지금 0 = 끔) |
 | Mongo | `fds_holds` | 새로 걸린 보류 (지갑, 룰, 보낸/받은 쪽, 근거). 14일 뒤 자동 삭제 |
 | Mongo | `outbox_events` | Kafka 전송 대기함. 전송 후 24시간 뒤 자동 삭제 |
-| Mongo | `fds_cases` | L1~L8 케이스. 자동 동결(`WALLET_FROZEN`) / 검토 대기(`REVIEW_PENDING`, `review_status: PENDING`). 직원 처리 상태는 위 직원 API 참고. 케이스 없는 직원 동결은 `rule_id: MANUAL` |
+| Mongo | `fds_cases` | L1~L8 케이스. 자동 동결(`WALLET_FROZEN`) / 검토 대기(`REVIEW_PENDING`, `review_status: PENDING`). 직원 처리 상태는 위 직원 API 참고. 케이스 없는 직원 동결은 `rule_id: MANUAL`. 반영한 경보 번호 `alert_ids` (최근 200개) |
+| Mongo | `fds_alert_outbox` | Spark 경보 전송 대기함 (`_id` = 경보 번호, `PENDING` → `PUBLISHED`). 전송 후 7일 뒤 자동 삭제 |
 | Mongo | `fds_blacklist`, `fds_whitelist` | 블랙리스트·화이트리스트 기록 (등록 한 번 = 문서 하나: 주소, 화이트리스트는 룰, 메모, 등록·해제한 직원과 시각). 해제해도 지우지 않고 `active: false` |
 | Redis | `fds:w:send / split / out / in:{지갑}` | 1단계 5분 기록 (6분 뒤 자동 삭제) |
 | Redis | `fds:hold:{지갑}` | 보류 중 (값 = 룰, 3분 뒤 자동 삭제) |
@@ -216,7 +256,8 @@ POST 본문에는 공통으로 `"operator": "직원ID"`, `"memo": "사유"`가 �
 | 사건 분리 기준 `CASE_GAP` | 10분 | `app/alert_consumer.py` |
 
 `app/` 코드를 고치면 `docker compose up -d --build <서비스>`로 다시 빌드한다.
-`spark/` 코드는 `docker compose restart spark`만 하면 된다. `spark/requirements.txt`를 바꾸면 `docker compose up -d --build spark`.
+`spark/` 코드는 로컬에서 `docker compose restart spark`만 하면 된다. `spark/requirements.txt`를 바꾸면 `docker compose up -d --build spark`.
+k3s는 이미지 안의 코드를 쓰므로 `spark/`·`common/`을 고칠 때마다 `docker compose build spark` 후 `deploy/k3s/import_images.sh`로 다시 넣는다.
 
 ## 운영 명령
 

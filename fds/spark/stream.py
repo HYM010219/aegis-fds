@@ -12,6 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                   # detector.py
 sys.path.insert(0, os.path.dirname(HERE))  # common/keys.py (fds 폴더 = 컨테이너의 /app)
 from common.keys import ALERT_TOPIC, FREEZE_TOPIC, HOLD_TOPIC, TRANSFER_TOPIC  # noqa: E402
+import alert_outbox  # noqa: E402
 import crosscheck  # noqa: E402
 from config import CROSSCHECK_ENABLED, PROFILE_NAME, TICK_TOPIC  # noqa: E402
 from detector import Detector  # noqa: E402
@@ -61,24 +62,30 @@ ticks = (
 def process_batch(df, batch_id):
     started = time.time()
     rows = [(row.topic, row.value) for row in df.collect()]
-    alerts, stats = detector.process(rows, batch_id=batch_id)
+    # 2) 계산만 한다. Redis 처리 표시는 경보를 저장한 뒤에 (detector.py 6번)
+    alerts, stats, done = detector.analyze(rows, batch_id=batch_id)
 
     # 2-1) L2·L6·L7 경보는 원본 거래를 Spark로 다시 계산해 근거 묶음(recompute)을 붙인다 (판단은 바꾸지 않음, 실패해도 경보는 나감)
     if alerts and CROSSCHECK_ENABLED:
         stats.update(crosscheck.attach(spark, detector.db, alerts, batch_id=batch_id))
 
-    # 3) 경보를 fds.alerts.v1로 보낸다. key를 지갑 주소로 두면 같은 지갑 경보는 순서대로 들어간다.
-    if alerts:
-        out = spark.createDataFrame(
-            [(a["violator_address"], json.dumps(a, ensure_ascii=False)) for a in alerts],
-            "key string, value string",
-        )
+    # 2-2) 보내기 전에 경보를 Mongo fds_alert_outbox에 적어 두고, 그다음 처리 표시
+    stats["saved"] = alert_outbox.save(detector.db, alerts, batch_id)
+    stats.update(detector.mark_done(done))
+
+    # 3) 아직 못 보낸 경보(이번 배치 + 지난번 실패분)를 fds.alerts.v1로 보낸다.
+    #    key를 지갑 주소로 두면 같은 지갑 경보는 순서대로 들어간다. 실패하면 예외 → 같은 배치를 다시 돌린다.
+    pending = alert_outbox.pending(detector.db)
+    if pending:
+        out = spark.createDataFrame([(d["key"], d["payload"]) for d in pending], "key string, value string")
         (
             out.write.format("kafka")
             .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
             .option("topic", ALERT_TOPIC)
             .save()
         )
+        alert_outbox.mark_published(detector.db, [d["_id"] for d in pending])
+    stats["published"] = len(pending)
 
     stats["seconds"] = round(time.time() - started, 2)
     # 배치 성공 하트비트를 Redis에 기록 (관제 화면 연동)
@@ -87,10 +94,12 @@ def process_batch(df, batch_id):
     except Exception as e:
         logger.warning(f"spark heartbeat error: {e}")
     # 할 일이 없던 배치(시계 신호만 있는 경우)는 로그를 남기지 않는다. 배치 시간이 10초보다 충분히 짧은지 여기서 본다.
-    if stats["analyzed"] or stats["l5_recheck"] or stats["alerts"] or stats["cooling"] or stats["recheck_queued"]:
+    if (stats["analyzed"] or stats["l5_recheck"] or stats["alerts"] or stats["cooling"] or stats["recheck_queued"]
+            or stats["published"]):
         logger.info(f"batch={batch_id} {json.dumps(stats)}")
 
 
+alert_outbox.ensure_indexes(detector.db)
 logger.info(f"detector 시작 profile={PROFILE_NAME} trigger={TRIGGER} topics={TRANSFER_TOPIC},{HOLD_TOPIC},{FREEZE_TOPIC}")
 (
     messages.unionByName(ticks)

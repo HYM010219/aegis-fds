@@ -68,7 +68,21 @@ export const ORIGINS = {
   APP: { label: "고객 앱", short: "A", tone: "teal", source: "앱" },
   SDN: { label: "OFAC SDN", short: "!", tone: "violet", source: "온체인" },
   EXCHANGE: { label: "거래소", short: "E", tone: "gray", source: "온체인" },
+  BOT: { label: "BOT", short: "B", tone: "bot", source: "BOT" }, // bot2·bot3 등이 만든 합성 지갑 (실제 온체인 아님)
 };
+
+/** 실제 이더리움 주소 모양 (0x + 16진수 40자리) */
+const ONCHAIN_ADDR = /^0x[0-9a-fA-F]{40}$/;
+/** 백엔드가 준 출처를 화면용으로 바로잡는다
+ *  - 봇 지갑(BOT- 접두어, bots/run_bots.py)은 백엔드가 SIM으로 보내도 BOT
+ *  - 시뮬레이터 지갑(wal_)은 SIM 그대로
+ *  - 온체인이라고 왔어도 주소가 0x 40자리 모양이 아니면 BOT */
+export function originOf(address, origin) {
+  if (origin === "BOT" || origin === "SYNTHETIC") return "BOT";
+  if (address && /^bot-/i.test(address)) return "BOT";
+  if (address && !ONCHAIN_ADDR.test(address) && (!origin || origin === "MAINNET")) return "BOT";
+  return origin;
+}
 
 /** 시뮬레이터 지갑은 R01~R06 면제 (기획서 9장 4번) */
 export const exemptFromR = (origin) => origin === "SIM";

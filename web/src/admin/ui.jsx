@@ -51,7 +51,7 @@ export function OriginTag({ origin, isNew }) {
   const o = ORIGINS[origin] || ORIGINS.MAINNET;
   return (
     <>
-      <span className={`otag o-${o.tone}`}>{o.label}</span>
+      {origin !== "BOT" && <span className={`otag o-${o.tone}`}>{o.label}</span>}{/* 봇은 지갑 옆에 표시하지 않고 "출처" 칸에만 BOT */}
       {isNew && <span className="otag o-new" title="처음 본 지 24시간 이내">새 지갑</span>}
     </>
   );

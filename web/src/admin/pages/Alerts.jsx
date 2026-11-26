@@ -147,7 +147,7 @@ export default function Alerts({ query = {} }) {
             {Object.entries(L_RULES).map(([id, r]) => <option key={id} value={id}>{id} {r.name}</option>)}
           </select>
           <select className="inp" value={source} onChange={(e) => setSource(e.target.value)} aria-label="출처">
-            <option value="ALL">출처 전체</option><option value="온체인">온체인</option><option value="SIM">시뮬레이터</option><option value="앱">고객 앱</option>
+            <option value="ALL">출처 전체</option><option value="온체인">온체인</option><option value="BOT">BOT</option><option value="SIM">시뮬레이터</option><option value="앱">고객 앱</option>
           </select>
           <select className="inp" value={minAmt} onChange={(e) => setMinAmt(Number(e.target.value))} aria-label="금액">
             <option value={0}>금액 전체</option><option value={1000}>1,000 USDT 이상</option><option value={10000}>10,000 USDT 이상</option>

@@ -124,6 +124,9 @@
 .avatar.o-blue { background: var(--accent-bg); color: var(--accent-2); }
 .avatar.o-teal { background: var(--teal-bg); color: var(--teal); }
 .avatar.o-violet { background: var(--block-bg); color: var(--block); }
+/* 봇 합성 지갑: 회색 + 점선 테두리 (실제 온체인 지갑과 한눈에 구분) */
+.o-bot { color: var(--text-2); background: var(--panel-2); border: 1px dashed var(--muted); }
+.avatar.o-bot { background: var(--panel-2); color: var(--text-2); border: 1px dashed var(--muted); }
 .addr { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .who { display: inline-flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }

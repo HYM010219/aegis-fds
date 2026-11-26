@@ -6,9 +6,26 @@
    ========================================================== */
 import { CONFIG } from "../../config.js";
 import * as S from "./store.js";
+import { originOf, ORIGINS } from "./meta.js";
 
 const BASE = CONFIG.API_BASE;
 export const isLive = () => !!BASE;
+
+/* 백엔드는 거래소·제재 지갑이 아니면 모두 MAINNET(온체인)으로 보낸다.
+   봇 합성 지갑도 온체인으로 보이지 않도록, 응답 안의 모든 출처 값을 주소 모양으로 다시 판정한다
+   (사건 목록·상세·상대 지갑·그래프 노드·송금 내역·대시보드 공통) */
+function fixOrigins(v) {
+  if (Array.isArray(v)) { v.forEach(fixOrigins); return v; }
+  if (!v || typeof v !== "object") return v;
+  if ("origin" in v) v.origin = originOf(v.violator_address || v.address || v.wallet, v.origin);
+  if ("fromOrigin" in v) {
+    v.fromOrigin = originOf(v.from, v.fromOrigin);
+    if (v.fromOrigin === "BOT" && "source" in v) v.source = ORIGINS.BOT.source; // 송금 내역 "출처" 칸 (백엔드는 "모의"로 보냄)
+  }
+  if ("toOrigin" in v) v.toOrigin = originOf(v.to, v.toOrigin);
+  Object.values(v).forEach((x) => { if (x && typeof x === "object") fixOrigins(x); });
+  return v;
+}
 
 async function http(path, opts = {}) {
   const r = await fetch(`${BASE}/api/v1/admin${path}`, {
@@ -16,7 +33,7 @@ async function http(path, opts = {}) {
     headers: { "Content-Type": "application/json", "X-Session-Token": `Bearer ${sessionStorage.getItem("aegis:admin_token") || ""}`, ...(opts.headers || {}) },
   });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
+  return fixOrigins(await r.json());
 }
 const mock = (fn) => new Promise((res, rej) => setTimeout(() => { try { res(fn()); } catch (e) { rej(e); } }, 40));
 

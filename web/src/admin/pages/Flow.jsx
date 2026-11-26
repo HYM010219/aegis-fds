@@ -45,18 +45,31 @@ function MoneyEdge({ id, sourceX, sourceY, targetX, targetY, markerEnd, style, l
 }
 const edgeTypes = { money: MoneyEdge };
 
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/** 룰에 걸린 경로의 지갑 순서 (A, B, C… 글자를 붙일 순서)
+ *  1) 경로 근거가 있으면 그 순서 (Mock: cycle / 백엔드: evidence_raw.path·flow_path·cycle_path)
+ *  2) 없으면 대상 지갑을 A로 두고, 룰에 걸린 거래를 시간순으로 따라가며 나오는 지갑 순서 */
+function pathOrder(c, edges = []) {
+  const raw = c.evidence_raw || {};
+  const given = [c.cycle, raw.path, raw.flow_path, raw.cycle_path].find((p) => Array.isArray(p) && p.length);
+  const seq = given ? [...given] : [c.violator_address, ...edges.filter((e) => e.hit).sort((a, b) => (a.ts || 0) - (b.ts || 0)).flatMap((e) => [e.from, e.to])];
+  return [...new Set(seq.filter(Boolean))]; // A→B→C→A처럼 처음 지갑이 다시 나오면 한 번만
+}
+
 /** 배치: 대상 지갑을 가운데, 룰에 걸린 경로를 안쪽 원, 나머지를 바깥 원에 */
 function layout(g, selected) {
   const center = g.nodes.find((n) => n.center);
-  const cyc = g.case.cycle || [];
-  const inner = g.nodes.filter((n) => !n.center && (n.onPath || cyc.includes(n.address)));
+  const cyc = pathOrder(g.case, g.edges);
+  const inner = g.nodes.filter((n) => !n.center && (n.onPath || cyc.includes(n.address)))
+    .sort((a, b) => (cyc.indexOf(a.address) + 1 || 99) - (cyc.indexOf(b.address) + 1 || 99)); // 경로 순서대로 돌아가며 배치
   const outer = g.nodes.filter((n) => !n.center && !inner.includes(n));
   const pos = {};
   pos[center.address] = { x: 0, y: 0 };
   inner.forEach((n, i) => { const a = -Math.PI / 3 + (i / Math.max(1, inner.length)) * Math.PI * 2 * 0.72; pos[n.address] = { x: Math.cos(a) * 240, y: Math.sin(a) * 200 }; });
   outer.forEach((n, i) => { const a = Math.PI * 0.62 + (i / Math.max(1, outer.length)) * Math.PI * 2; const r = n.level > 1 ? 470 : 360; pos[n.address] = { x: Math.cos(a) * r, y: Math.sin(a) * r * 0.75 }; });
   const letters = {};
-  if (cyc.length) cyc.forEach((a, i) => { letters[a] = "ABCDEFG"[i]; });
+  cyc.forEach((a, i) => { letters[a] = LETTERS[i]; });
   const nodes = g.nodes.map((n) => ({
     id: n.address, type: "wallet", position: pos[n.address] || { x: 0, y: 0 },
     data: {
@@ -109,7 +122,8 @@ export default function Flow({ caseId }) {
   const selNode = base.nodes.find((n) => n.address === (sel || c.violator_address));
   const selEdges = base.edges.filter((e) => e.from === selNode?.address || e.to === selNode?.address);
   const pathTx = c.related.filter((t) => t.status === "ACCEPTED").sort((a, b) => a.ts - b.ts);
-  const letter = (a) => { const i = (c.cycle || []).indexOf(a); return i >= 0 ? "ABC"[i] : a === c.violator_address ? "대상" : short(a, 4, 3); };
+  const order = pathOrder(c, base.edges);
+  const letter = (a) => { const i = order.indexOf(a); return i >= 0 ? LETTERS[i] : a === c.violator_address ? "대상" : short(a, 4, 3); };
   const span = range.to - range.from;
   const pct = (t) => ((t - range.from) / span) * 100;
   const w = win || [0, 100];

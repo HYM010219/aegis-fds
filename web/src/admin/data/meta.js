@@ -72,7 +72,7 @@ export const ORIGINS = {
 };
 
 /** 실제 이더리움 주소 모양 (0x + 16진수 40자리) */
-const ONCHAIN_ADDR = /^0x[0-9a-fA-F]{40}$/;
+export const ONCHAIN_ADDR = /^0x[0-9a-fA-F]{40}$/;
 /** 백엔드가 준 출처를 화면용으로 바로잡는다
  *  - 봇 지갑(BOT- 접두어, bots/run_bots.py)은 백엔드가 SIM으로 보내도 BOT
  *  - 시뮬레이터 지갑(wal_)은 SIM 그대로

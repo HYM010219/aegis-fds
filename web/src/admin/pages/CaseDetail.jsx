@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceLine, CartesianGrid } from "recharts";
 import { useCase, useDecide } from "../data/hooks.js";
 import { api, isLive } from "../data/api.js";
-import { L_RULES, LONG_LABEL, ORIGINS } from "../data/meta.js";
+import { L_RULES, LONG_LABEL, ORIGINS, ONCHAIN_ADDR } from "../data/meta.js";
 import { can, actorName } from "../auth.js";
 import { navigate } from "../router.js";
 import { CONFIG } from "../../config.js";
@@ -233,7 +233,7 @@ export default function CaseDetail({ id, me }) {
             <div className="ch-addr">
               <Addr a={c.violator_address} full copyable />
               {c.label && <span className="otag" title={c.label}>{c.label}</span>}
-              <a href={`https://etherscan.io/address/${c.violator_address}`} target="_blank" rel="noreferrer" className="ext">Etherscan ↗</a>
+              {ONCHAIN_ADDR.test(c.violator_address || "") && <a href={`https://etherscan.io/address/${c.violator_address}`} target="_blank" rel="noreferrer" className="ext">Etherscan ↗</a>}{/* 봇 지갑(BOT-)은 이더리움에 없는 주소라 링크 숨김 */}
             </div>
             <div className="tags">
               <Grade g={c.risk_level} /><Rule id={c.rule_id} /><OriginTag origin={c.origin} isNew={c.isNew} /><Status s={c.status} />

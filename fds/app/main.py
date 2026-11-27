@@ -25,6 +25,7 @@ from app import eval_poc  # [EVAL] PoC 평가 전용 (운영에서 뺄 때 이 �
 from app.holds import HOLD_SECONDS, Hold, evaluate, hold_key, undo_record
 from app.idempotency import claim_idempotency, release_idempotency
 from app.mongo_client import mongo_client
+from app.pod_identity import PodIdentityMiddleware
 from app.redis_client import redis_client
 from app.store import ensure_indexes, execute_transfer, parse_amount, save_rejected, save_sender_hold
 from app.wallet_status import BLACKLISTED_RECEIVER, check_wallets
@@ -91,6 +92,7 @@ async def lifespan(app: FastAPI):
     await mongo_client.close()
 
 app = FastAPI(title="AEGIS-FDS Gateway", lifespan=lifespan)
+app.add_middleware(PodIdentityMiddleware)
 # 직원 API (수동 동결·이상 없음·동결 해제·지갑 상태)  → admin.py
 admin.install(app)
 admin_views.install(app)

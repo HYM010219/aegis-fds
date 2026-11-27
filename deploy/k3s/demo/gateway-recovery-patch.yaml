@@ -1,0 +1,17 @@
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: gateway
+          lifecycle:
+            preStop:
+              exec:
+                command: [python, -c, "import time; time.sleep(5)"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IDENTITY_HEADER
+              value: "0"

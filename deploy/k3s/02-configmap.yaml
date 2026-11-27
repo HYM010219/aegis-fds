@@ -28,6 +28,10 @@ data:
         listen 8080;
         server_name _;
 
+        # 시험용 파드 식별 정보는 외부 프록시 응답에서 제외한다.
+        proxy_hide_header X-Gateway-Pod;
+        proxy_hide_header X-Gateway-Pod-Uid;
+
         client_max_body_size 20M;
 
         # 1) 보안 관리자 관제 콘솔 (/admin/)

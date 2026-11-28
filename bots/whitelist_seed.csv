@@ -1,0 +1,13 @@
+address,label,rules,memo
+0x28c6c06298d514db089934071355e5743bf21d60,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x21a31ee1afc51d94c2efccaa2092ad1028285549,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0xdfd5293d8e347dff59e90ef0cdb985e32943e777,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x5e032243d507c743b061ef021e4e07414fc712df,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x0c6d7a736a27f2614f157793c74533d602832299,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x97b98c99cdaa2b344d12f2c55359a35c0eb7163c,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x503828976d22510aad0201ac7ec88293211d23da,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x2910543af39aba0cd09dbb2d50200b3e800a63d2,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x6cc5f688a315f3dc28a7781717a9a798a59fda7b,미검증,R01;R02;R03;R04;R05;R06;L,로컬 Mongo 원본 시드 A (수집기 KNOWN_EXCHANGES 11/18 등록)
+0x559432e18b281731c054cd703d4b49872be4ed53,OKX Hot Wallet 5,R01;R04;R05;L,entities.json 검증 완료 (11/19 1차 측정 미통과 최다 49건)
+0x000000000004444c5dc75cb358380d2e3de08a90,Uniswap V4 Pool Manager,R01;R04;R05;L,entities.json 검증 완료 (11/19 DEX 인프라 계약)
+0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb,Morpho Blue,R01;R04;R05;L,entities.json 검증 완료 (11/19 L8 순환 오탐 면제)

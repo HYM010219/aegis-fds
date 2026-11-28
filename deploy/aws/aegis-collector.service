@@ -1,0 +1,18 @@
+[Unit]
+Description=Aegis-FDS On-chain Alchemy WebSocket Collector
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/aegis-fds
+EnvironmentFile=/home/ubuntu/aegis-fds/.env
+ExecStart=/usr/bin/python3 collector/collector_alchemy.py --record data/onchain/
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ubuntu/collector.log
+StandardError=append:/home/ubuntu/collector_error.log
+
+[Install]
+WantedBy=multi-user.target

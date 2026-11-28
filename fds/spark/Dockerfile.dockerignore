@@ -1,0 +1,7 @@
+# Spark 이미지 전용 (fds/.dockerignore 대신 쓰인다). 빌드 위치 fds 폴더에서 spark/와 common/만 넣는다.
+*
+!spark/
+!common/
+**/__pycache__/
+**/*.pyc
+spark/Dockerfile*

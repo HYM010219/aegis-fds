@@ -1,0 +1,48 @@
+# Helm values for kube-prometheus-stack
+# Installed in namespace: monitoring via:
+# helm install mon prometheus-community/kube-prometheus-stack -n monitoring --create-namespace -f deploy/k3s/monitoring-values.yaml
+
+defaultRules:
+  create: true
+
+alertmanager:
+  enabled: false
+
+# K3s packages these components differently; do not create unreachable scrape targets.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1024Mi
+      limits:
+        cpu: 500m
+        memory: 2048Mi
+
+grafana:
+  enabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: monitoring
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      serve_from_sub_path: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi

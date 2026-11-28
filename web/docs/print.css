@@ -1,0 +1,67 @@
+@page { size: A4; margin: 16mm 15mm 16mm; }
+* { box-sizing: border-box; }
+body {
+  font-family: "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+  color: #1d1f27; font-size: 10.2pt; line-height: 1.62; margin: 0;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.mono, code, pre { font-family: "Cascadia Code", Consolas, "D2Coding", monospace; }
+code { background: #eef1f7; padding: 1px 5px; border-radius: 4px; font-size: 8.8pt; color: #1e40af; }
+pre { background: #0f1117; color: #e4e4e7; padding: 11px 13px; border-radius: 8px; font-size: 8.4pt; line-height: 1.5; white-space: pre-wrap; break-inside: avoid; }
+pre .c { color: #71717a; } pre .s { color: #fb923c; } pre .k { color: #93c5fd; }
+
+.cover {
+  height: 262mm; display: flex; flex-direction: column; justify-content: space-between;
+  background: radial-gradient(500px 300px at 15% 10%, rgba(59,130,246,.35), transparent 70%), #0b0c11;
+  color: #e8e9ee; border-radius: 14px; padding: 22mm 18mm; break-after: page;
+}
+.cover .kicker { font-family: Consolas, monospace; color: #60a5fa; font-size: 10pt; letter-spacing: .08em; }
+.cover h1 { font-size: 30pt; line-height: 1.2; margin: 10px 0 12px; letter-spacing: -.02em; }
+.cover .sub { color: #a1a1aa; font-size: 12pt; }
+.cover .meta { font-family: Consolas, monospace; font-size: 9pt; color: #8b8d9a; border-top: 1px solid #2a2b35; padding-top: 12px; }
+.cover .meta b { color: #e8e9ee; font-weight: 600; }
+.cover img { width: 100%; border-radius: 10px; border: 1px solid #2a2b35; }
+
+h1.sec { font-size: 17pt; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 2px solid #1d1f27; break-after: avoid; }
+h1.sec span { color: #3b82f6; font-family: Consolas, monospace; margin-right: 8px; }
+h2 { font-size: 12.5pt; margin: 18px 0 6px; color: #111827; break-after: avoid; }
+h3 { font-size: 10.8pt; margin: 12px 0 4px; color: #1e3a8a; break-after: avoid; }
+p { margin: 5px 0 8px; }
+ul, ol { margin: 4px 0 10px; padding-left: 20px; }
+li { margin: 2px 0; }
+.page { break-before: page; }
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 9pt; break-inside: auto; }
+th, td { border: 1px solid #d6dae3; padding: 5px 8px; vertical-align: top; text-align: left; }
+th { background: #f1f4f9; font-weight: 700; }
+tr { break-inside: avoid; }
+
+.fig { margin: 8px 0 12px; text-align: center; break-inside: avoid; }
+.fig img { max-width: 100%; border-radius: 8px; border: 1px solid #d6dae3; }
+.fig .cap { font-size: 8.5pt; color: #6b7280; margin-top: 4px; }
+.row { display: flex; gap: 12px; align-items: flex-start; }
+.row > * { flex: 1; min-width: 0; }
+
+.box { border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 8px; padding: 9px 13px; margin: 8px 0 12px; break-inside: avoid; }
+.box.warn { border-color: #fcd34d; background: #fffbeb; }
+.box.red { border-color: #fda4af; background: #fff1f2; }
+.box.green { border-color: #86efac; background: #f0fdf4; }
+.box b.t { display: block; margin-bottom: 3px; }
+
+.step { display: flex; gap: 10px; margin: 7px 0; break-inside: avoid; }
+.step .n { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #2563eb; color: #fff; font-weight: 700; font-size: 9pt; display: grid; place-items: center; margin-top: 1px; }
+.pill { display: inline-block; font-family: Consolas, monospace; font-size: 8.2pt; padding: 0 7px; border-radius: 99px; border: 1px solid; }
+.p-ok { color: #15803d; border-color: #86efac; background: #f0fdf4; }
+.p-mid { color: #b45309; border-color: #fcd34d; background: #fffbeb; }
+.p-high { color: #be123c; border-color: #fda4af; background: #fff1f2; }
+.p-info { color: #1d4ed8; border-color: #93c5fd; background: #eff6ff; }
+.toc { columns: 2; font-size: 10pt; }
+.toc div { break-inside: avoid; padding: 2px 0; }
+.toc span { color: #3b82f6; font-family: Consolas, monospace; margin-right: 6px; }
+.lv { font-family: Consolas, monospace; font-size: 8.2pt; color: #6b7280; }
+.p-frozen { color: #fff; background: #be123c; border-color: #be123c; }
+.p-hold { color: #92400e; background: #fffbeb; border-color: #f59e0b; }
+.p-review { color: #854d0e; background: #fef9c3; border-color: #eab308; }
+.p-block { color: #5b21b6; background: #f5f3ff; border-color: #a78bfa; }
+.p-staff { color: #fff; background: #7c3aed; border-color: #7c3aed; }
+.acc { font-family: Consolas, monospace; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 1px 7px; }

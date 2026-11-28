@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Aegis-FDS PoC v2 (rule spec v2.4 section 9.6). Two nodes in one AZ:
+  app node in a public subnet (K3s), data node in a private subnet (Docker Compose:
+  Mongo, Redis, Kafka, ClickHouse). No NAT, no ALB, no SSH. SSM only.
+  The private subnet reaches S3 through a gateway endpoint and SSM through interface endpoints.
+
+Parameters:
+  AllowedCidr1:
+    Type: String
+    Description: "Required. Your current public IP with /32 (e.g. 1.2.3.4/32)"
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/32$'
+  AllowedCidr2:
+    Type: String
+    Default: ""
+    Description: "Optional second location (/32). Leave empty if none"
+  AllowedCidr3:
+    Type: String
+    Default: ""
+    Description: "Optional third location (/32). Leave empty if none"
+  AppInstanceType:
+    Type: String
+    Default: m5.xlarge
+    AllowedValues: [m5.xlarge, m5.2xlarge]
+    Description: "App node (K3s): gateway x2, collector, spark, publisher, alert-consumer, nginx, monitoring"
+  DataInstanceType:
+    Type: String
+    Default: m5.xlarge
+    AllowedValues: [m5.xlarge, m5.2xlarge]
+    Description: "Data node (Compose): mongo, redis, kafka, clickhouse. Check the Kafka CPU distribution before choosing"
+  DataPrivateIp:
+    Type: String
+    Default: 10.30.2.10
+    Description: "Fixed private IP of the data node. Kafka advertised.listeners and the Mongo replica-set host use it"
+    AllowedPattern: '^10\.30\.2\.\d{1,3}$'
+  VolumeSizeGiB:
+    Type: Number
+    Default: 100
+    MinValue: 50
+    MaxValue: 200
+  CreateSsmEndpoints:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: "Interface endpoints (ssm, ssmmessages, ec2messages) so the private data node is reachable by Session Manager without NAT"
+  UbuntuAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: "App node: latest Ubuntu 22.04 (same as v1)"
+  Al2023AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: "Data node: Amazon Linux 2023. Its package repos are served from S3, so dnf works through the S3 gateway endpoint without NAT"
+
+Conditions:
+  HasCidr2: !Not [!Equals [!Ref AllowedCidr2, ""]]
+  HasCidr3: !Not [!Equals [!Ref AllowedCidr3, ""]]
+  WantSsmEndpoints: !Equals [!Ref CreateSsmEndpoints, "true"]
+
+Resources:
+  # ---------- Network ----------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.30.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: aegis-v2-vpc }
+        - { Key: Project, Value: aegis-fds }
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: aegis-v2-igw }
+        - { Key: Project, Value: aegis-fds }
+
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref Igw
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.30.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: aegis-v2-public }
+        - { Key: Project, Value: aegis-fds }
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.30.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name, Value: aegis-v2-private }
+        - { Key: Project, Value: aegis-fds }
+
+  PublicRt:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: aegis-v2-public-rt }
+        - { Key: Project, Value: aegis-fds }
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRt
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+
+  PublicRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRt
+
+  # Private route table: local VPC route only. No 0.0.0.0/0 (no NAT, no IGW).
+  PrivateRt:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: aegis-v2-private-rt }
+        - { Key: Project, Value: aegis-fds }
+
+  PrivateRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRt
+
+  # S3 gateway endpoint (free): image tarballs + Amazon Linux 2023 package repos
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds: [!Ref PrivateRt, !Ref PublicRt]
+
+  # ---------- Security groups ----------
+  AppSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: aegis-v2 app node, web from allowed IPs only (no SSH, no 6443)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+      Tags:
+        - { Key: Name, Value: aegis-v2-app-sg }
+        - { Key: Project, Value: aegis-fds }
+
+  Cidr2Rules:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+  Cidr2Rules443:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+  Cidr2Rules8080:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+  Cidr3Rules:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+  Cidr3Rules443:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+  Cidr3Rules8080:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+
+  # Data node: only the app node may connect, only on the data ports
+  DataSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: aegis-v2 data node, data ports from the app node SG only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 27017, ToPort: 27017, SourceSecurityGroupId: !Ref AppSg, Description: mongo }
+        - { IpProtocol: tcp, FromPort: 6379, ToPort: 6379, SourceSecurityGroupId: !Ref AppSg, Description: redis }
+        - { IpProtocol: tcp, FromPort: 9092, ToPort: 9092, SourceSecurityGroupId: !Ref AppSg, Description: kafka-external }
+        - { IpProtocol: tcp, FromPort: 8123, ToPort: 8123, SourceSecurityGroupId: !Ref AppSg, Description: clickhouse-http }
+      Tags:
+        - { Key: Name, Value: aegis-v2-data-sg }
+        - { Key: Project, Value: aegis-fds }
+
+  EndpointSg:
+    Type: AWS::EC2::SecurityGroup
+    Condition: WantSsmEndpoints
+    Properties:
+      GroupDescription: aegis-v2 SSM interface endpoints, 443 from inside the VPC
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 10.30.0.0/16, Description: vpc }
+      Tags:
+        - { Key: Name, Value: aegis-v2-endpoint-sg }
+        - { Key: Project, Value: aegis-fds }
+
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSsmEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSg]
+      PrivateDnsEnabled: true
+  SsmMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSsmEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSg]
+      PrivateDnsEnabled: true
+  Ec2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: WantSsmEndpoints
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSg]
+      PrivateDnsEnabled: true
+
+  # ---------- Deploy bucket (private, SSE-S3): code bundle + image tarballs ----------
+  DeployBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      Tags:
+        - { Key: Project, Value: aegis-fds }
+
+  # ---------- IAM ----------
+  # App node: SSM + read/write on the deploy bucket (it uploads image tarballs for the data node)
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: aegis-s3-rw-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DeployBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DeployBucket.Arn
+      Tags:
+        - { Key: Project, Value: aegis-fds }
+
+  AppProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+
+  # Data node: SSM + read-only on the deploy bucket
+  DataRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: aegis-s3-read-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${DeployBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DeployBucket.Arn
+      Tags:
+        - { Key: Project, Value: aegis-fds }
+
+  DataProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref DataRole]
+
+  # ---------- Launch templates (IMDSv2 required, encrypted gp3) ----------
+  UbuntuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref VolumeSizeGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - { Key: Project, Value: aegis-fds }
+
+  Al2023LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref VolumeSizeGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - { Key: Project, Value: aegis-fds }
+
+  # ---------- Instances (termination protection on) ----------
+  AppInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicDefaultRoute
+    Properties:
+      ImageId: !Ref UbuntuAmiId
+      InstanceType: !Ref AppInstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref AppSg]
+      IamInstanceProfile: !Ref AppProfile
+      DisableApiTermination: true
+      LaunchTemplate:
+        LaunchTemplateId: !Ref UbuntuLaunchTemplate
+        Version: !GetAtt UbuntuLaunchTemplate.LatestVersionNumber
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+          timedatectl set-timezone Asia/Seoul
+          apt-get update -y
+          apt-get install -y at tmux jq
+          snap install aws-cli --classic || true
+          echo "userdata done $(date)" > /var/log/aegis-userdata.done
+      Tags:
+        - { Key: Name, Value: aegis-v2-app }
+        - { Key: Role, Value: app-k3s }
+        - { Key: Project, Value: aegis-fds }
+
+  DataInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [S3GatewayEndpoint, PrivateRtAssoc]
+    Properties:
+      ImageId: !Ref Al2023AmiId
+      InstanceType: !Ref DataInstanceType
+      SubnetId: !Ref PrivateSubnet
+      PrivateIpAddress: !Ref DataPrivateIp
+      SecurityGroupIds: [!Ref DataSg]
+      IamInstanceProfile: !Ref DataProfile
+      DisableApiTermination: true
+      LaunchTemplate:
+        LaunchTemplateId: !Ref Al2023LaunchTemplate
+        Version: !GetAtt Al2023LaunchTemplate.LatestVersionNumber
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+          timedatectl set-timezone Asia/Seoul
+          # dnf repos are on S3 -> reachable through the S3 gateway endpoint (no NAT)
+          dnf install -y docker tmux
+          systemctl enable --now docker
+          usermod -aG docker ec2-user || true
+          echo "userdata done $(date)" > /var/log/aegis-userdata.done
+      Tags:
+        - { Key: Name, Value: aegis-v2-data }
+        - { Key: Role, Value: data-compose }
+        - { Key: Project, Value: aegis-fds }
+
+Outputs:
+  AppInstanceId:
+    Value: !Ref AppInstance
+  AppPublicIp:
+    Description: "Changes after stop/start (no Elastic IP)"
+    Value: !GetAtt AppInstance.PublicIp
+  AppPrivateIp:
+    Value: !GetAtt AppInstance.PrivateIp
+  DataInstanceId:
+    Value: !Ref DataInstance
+  DataPrivateIp:
+    Description: "Use in the K3s ConfigMap, Kafka advertised.listeners and the Mongo replica-set host"
+    Value: !GetAtt DataInstance.PrivateIp
+  DeployBucketName:
+    Description: "Code bundle and image tarballs"
+    Value: !Ref DeployBucket
+  AppSecurityGroupId:
+    Value: !Ref AppSg

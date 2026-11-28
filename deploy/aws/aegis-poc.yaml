@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Aegis-FDS PoC single host (VPC + public subnet, no NAT; SG for allowed IPs only;
+  no SSH, SSM only; EC2 role reads only the deploy bucket created here).
+
+Parameters:
+  AllowedCidr1:
+    Type: String
+    Description: "Required. Your current public IP with /32 (e.g. 1.2.3.4/32)"
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/32$'
+  AllowedCidr2:
+    Type: String
+    Default: ""
+    Description: "Optional second location (/32). Leave empty if none"
+  AllowedCidr3:
+    Type: String
+    Default: ""
+    Description: "Optional third location (/32). Leave empty if none"
+  InstanceType:
+    Type: String
+    Default: m5.2xlarge
+    AllowedValues: [m5.xlarge, m5.2xlarge]
+  VolumeSizeGiB:
+    Type: Number
+    Default: 100
+    MinValue: 50
+    MaxValue: 200
+  UbuntuAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: "Latest Ubuntu 22.04 (resolved automatically)"
+
+Conditions:
+  HasCidr2: !Not [!Equals [!Ref AllowedCidr2, ""]]
+  HasCidr3: !Not [!Equals [!Ref AllowedCidr3, ""]]
+
+Resources:
+  # ---------- Network ----------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: aegis-poc-vpc }
+        - { Key: Project, Value: aegis-fds }
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: aegis-poc-igw }
+        - { Key: Project, Value: aegis-fds }
+
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref Igw
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: aegis-poc-public }
+        - { Key: Project, Value: aegis-fds }
+
+  PublicRt:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: aegis-poc-rt }
+        - { Key: Project, Value: aegis-fds }
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRt
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+
+  SubnetRtAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRt
+
+  # ---------- Security group: 80/443/8080 from allowed IPs only, no 22 ----------
+  AppSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: aegis-poc web from allowed IPs only (no SSH)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr1, Description: loc1 }
+      Tags:
+        - { Key: Name, Value: aegis-poc-sg }
+        - { Key: Project, Value: aegis-fds }
+
+  Cidr2Rules:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+  Cidr2Rules443:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+  Cidr2Rules8080:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr2, Description: loc2 }
+
+  Cidr3Rules:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+  Cidr3Rules443:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+  Cidr3Rules8080:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties: { GroupId: !Ref AppSg, IpProtocol: tcp, FromPort: 8080, ToPort: 8080, CidrIp: !Ref AllowedCidr3, Description: loc3 }
+
+  # ---------- Deploy bucket (private, SSE-S3) ----------
+  DeployBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      Tags:
+        - { Key: Project, Value: aegis-fds }
+
+  # ---------- IAM: SSM + read-only on the deploy bucket ----------
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: aegis-s3-read-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${DeployBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DeployBucket.Arn
+      Tags:
+        - { Key: Project, Value: aegis-fds }
+
+  Ec2Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Ec2Role]
+
+  # ---------- EC2 (IMDSv2 required, encrypted gp3, termination protection) ----------
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref VolumeSizeGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - { Key: Project, Value: aegis-fds }
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Ref UbuntuAmiId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref AppSg]
+      IamInstanceProfile: !Ref Ec2Profile
+      DisableApiTermination: true
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+          timedatectl set-timezone Asia/Seoul
+          apt-get update -y
+          apt-get install -y at tmux
+          snap install aws-cli --classic || true
+          echo "userdata done $(date)" > /var/log/aegis-userdata.done
+      Tags:
+        - { Key: Name, Value: aegis-poc }
+        - { Key: Project, Value: aegis-fds }
+
+Outputs:
+  InstanceId:
+    Value: !Ref AppInstance
+  PublicIp:
+    Description: "Changes after stop/start (no Elastic IP)"
+    Value: !GetAtt AppInstance.PublicIp
+  DeployBucketName:
+    Description: "Upload aegis.bundle here"
+    Value: !Ref DeployBucket
+  SecurityGroupId:
+    Value: !Ref AppSg

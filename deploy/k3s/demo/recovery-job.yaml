@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recovery-demo
+  namespace: aegis
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recovery-demo
+  namespace: aegis
+rules:
+  # Namespace-scoped demo permission; remove after demonstration.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recovery-demo
+  namespace: aegis
+subjects:
+  - kind: ServiceAccount
+    name: recovery-demo
+    namespace: aegis
+roleRef:
+  kind: Role
+  name: recovery-demo
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: recovery-demo
+  namespace: aegis
+spec:
+  # Never rerun an injected fault automatically.
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app: recovery-demo
+    spec:
+      serviceAccountName: recovery-demo
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: demo
+          # Uses the already imported app image; no new registry pull needed.
+          image: aegis-gateway:latest
+          imagePullPolicy: Never
+          command: [python, -u, /demo/k3s_recovery_demo.py]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-env
+                  key: GATEWAY_API_KEY
+            - name: DEMO_RPS
+              value: "10"
+            - name: DEMO_DURATION
+              value: "90"
+            - name: DEMO_FAULT_AFTER
+              value: "15"
+          ports:
+            - name: metrics
+              containerPort: 9109
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: script
+              mountPath: /demo
+              readOnly: true
+            - name: results
+              mountPath: /results
+      volumes:
+        - name: script
+          configMap:
+            name: recovery-demo-script
+        - name: results
+          emptyDir: {}

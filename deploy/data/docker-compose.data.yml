@@ -1,0 +1,109 @@
+# Data Node (Private Subnet) - Stateful Infrastructure
+# Aegis-FDS Specification v2.4 §9.6
+# Managed via Docker Compose on Data Node (m5.xlarge)
+
+services:
+  redis:
+    image: redis:7.4
+    container_name: aegis-redis
+    command: redis-server --appendonly yes --bind 0.0.0.0 --protected-mode no
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7.0
+    container_name: aegis-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: '${DATA_IP:-10.30.2.10}:27017'}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: aegis-kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka:29092,EXTERNAL://${DATA_IP:-10.30.2.10}:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    container_name: aegis-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "
+      echo 'Creating 6 required Aegis-FDS Kafka topics...';
+      for topic in transfer.events.v1 transfer.rejected.v1 fds.holds.v1 fds.alerts.v1 fds.freezes.v1 fds.ground_truth.v1; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic $$topic --partitions 1 --replication-factor 1;
+      done;
+      echo 'All 6 topics created:';
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list;
+      "
+    restart: "no"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: aegis-clickhouse
+    environment:
+      - CLICKHOUSE_DB=aegis
+      - CLICKHOUSE_USER=aegis
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ../../fds/clickhouse:/docker-entrypoint-initdb.d:ro
+      - ../../fds/clickhouse/kafka.xml:/etc/clickhouse-server/config.d/kafka.xml:ro
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mongo-data:
+  kafka-data:
+  clickhouse-data:
